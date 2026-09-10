@@ -12,8 +12,8 @@ primary_region = 'iad'
 [env]
   MAILPORT_OPERATIONS = '/data/operations.json'
   MAILPORT_OUTBOX = '/data/outbox.json'
-  MAILPORT_SMTP_REQUIRE_TLS = 'true'
-  MAILPORT_TRANSPORT = 'smtp'
+  MAILPORT_DIRECT_MX_WORKER_URL = 'https://mail.agenttrustvault.com'
+  MAILPORT_TRANSPORT = 'direct-mx'
   NODE_ENV = 'production'
   PORT = '8789'
 
