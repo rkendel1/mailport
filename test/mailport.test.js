@@ -38,7 +38,7 @@ test("supports template send and idempotency", async () => {
 
 test("supports explicit send, list/get/clear, and waitFor", async () => {
   const mail = createMailPort({
-    applicationId: "appboundry",
+    applicationId: "appboundary",
     transport: "memory",
     testEndpointsEnabled: true,
     identities: { system: "notifications@myapp.com" },
@@ -172,4 +172,5 @@ test("durable outbox retries and eventually marks sent", async () => {
   assert.ok(delivered);
   assert.equal(delivered.status, "sent");
   assert.equal(attempts, 2);
+  await mail.close();
 });

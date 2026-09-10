@@ -1,4 +1,11 @@
 import fs from "node:fs";
+import { randomUUID } from "node:crypto";
+
+const sleepBuffer = new Int32Array(new SharedArrayBuffer(4));
+
+function sleepMs(ms) {
+  Atomics.wait(sleepBuffer, 0, 0, ms);
+}
 
 function deepClone(value) {
   if (typeof structuredClone === "function") {
@@ -14,8 +21,43 @@ function nowIso() {
 class FileBackedMessages {
   constructor(filePath) {
     this.filePath = filePath;
+    this.lockPath = filePath ? `${filePath}.lock` : null;
     this.messages = new Map();
     this.#load();
+  }
+
+  #withLock(callback, { retryCount = 20, retryDelayMs = 5 } = {}) {
+    if (!this.lockPath) {
+      return callback();
+    }
+    let lockFd = null;
+    for (let attempt = 0; attempt <= retryCount; attempt += 1) {
+      try {
+        lockFd = fs.openSync(this.lockPath, "wx");
+        break;
+      } catch (error) {
+        if (!error || error.code !== "EEXIST") {
+          throw error;
+        }
+        if (attempt === retryCount) {
+          throw new Error("Outbox lock contention: unable to acquire file lock");
+        }
+        sleepMs(retryDelayMs);
+      }
+    }
+
+    try {
+      this.messages.clear();
+      this.#load();
+      return callback();
+    } finally {
+      if (lockFd !== null) {
+        fs.closeSync(lockFd);
+      }
+      if (fs.existsSync(this.lockPath)) {
+        fs.unlinkSync(this.lockPath);
+      }
+    }
   }
 
   #load() {
@@ -47,13 +89,37 @@ class FileBackedMessages {
   }
 
   put(message) {
-    this.messages.set(message.message_id, deepClone(message));
-    this.#persist();
+    this.#withLock(() => {
+      this.messages.set(message.message_id, deepClone(message));
+      this.#persist();
+    });
+  }
+
+  findOne(predicate) {
+    for (const message of this.messages.values()) {
+      if (predicate(message)) return deepClone(message);
+    }
+    return null;
   }
 
   clear() {
-    this.messages.clear();
-    this.#persist();
+    this.#withLock(() => {
+      this.messages.clear();
+      this.#persist();
+    });
+  }
+
+  claimOne(predicate, updater) {
+    return this.#withLock(() => {
+      for (const message of this.messages.values()) {
+        if (!predicate(message)) continue;
+        const updated = updater(deepClone(message));
+        this.messages.set(updated.message_id, deepClone(updated));
+        this.#persist();
+        return updated;
+      }
+      return null;
+    });
   }
 }
 
@@ -84,23 +150,22 @@ export function createOutbox({ filePath } = {}) {
     },
     claimNext({ leaseMs = 30_000 } = {}) {
       const now = Date.now();
-      const candidate = storage.list().find((message) => {
+      const candidate = storage.claimOne(
+        (message) => {
         if (message.status !== "queued") return false;
         const nextRetry = message.next_retry_at ? Date.parse(message.next_retry_at) : 0;
         if (nextRetry > now) return false;
         const leasedUntil = message.lease_expires_at ? Date.parse(message.lease_expires_at) : 0;
         return !leasedUntil || leasedUntil <= now;
-      });
-      if (!candidate) return null;
-
-      const claimed = {
-        ...candidate,
-        lease_token: `lease-${Math.random().toString(16).slice(2)}`,
-        lease_expires_at: new Date(now + leaseMs).toISOString(),
-        updated_at: nowIso(),
-      };
-      storage.put(claimed);
-      return claimed;
+        },
+        (message) => ({
+          ...message,
+          lease_token: `lease-${randomUUID().replace(/-/g, "")}`,
+          lease_expires_at: new Date(now + leaseMs).toISOString(),
+          updated_at: nowIso(),
+        })
+      );
+      return candidate || null;
     },
     markSent(messageId, status = "sent") {
       const message = storage.get(messageId);

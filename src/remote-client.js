@@ -115,6 +115,7 @@ export function createRemoteMailPortClient({
         return null;
       },
     },
+    close() {},
   };
 
   return client;

@@ -5,7 +5,7 @@ import { createMailPortService } from "../src/remote-service.js";
 
 test("remote client talks to authenticated MailPort service", async () => {
   const serviceMail = createMailPort({
-    applicationId: "authboundry",
+    applicationId: "authboundary",
     transport: "memory",
     testEndpointsEnabled: true,
     identities: { auth: "auth@authboundry.com" },
@@ -50,7 +50,7 @@ test("remote client talks to authenticated MailPort service", async () => {
 
 test("remote service enforces auth", async () => {
   const serviceMail = createMailPort({
-    applicationId: "authboundry",
+    applicationId: "authboundary",
     transport: "memory",
     testEndpointsEnabled: true,
     identities: { auth: "auth@authboundry.com" },

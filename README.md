@@ -23,5 +23,5 @@ npm test
 ## Run remote MailPort service
 
 ```bash
-app mail service --port 8789 --api-key dev-key
+node ./bin/app.js mail service --host 127.0.0.1 --port 8789 --api-key dev-key
 ```

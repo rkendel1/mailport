@@ -83,6 +83,13 @@ export function createMailPort(config) {
   const messages = new Map();
   const idempotency = new Map();
   const outbox = durableOutboxEnabled ? createOutbox({ filePath: config.outbox?.filePath }) : null;
+  if (durableOutboxEnabled) {
+    for (const message of outbox.list()) {
+      if (message.idempotencyKey) {
+        idempotency.set(message.idempotencyKey, message);
+      }
+    }
+  }
   const worker =
     durableOutboxEnabled && config.outbox?.workerEnabled !== false
       ? createOutboxWorker({
@@ -94,11 +101,16 @@ export function createMailPort(config) {
         })
       : null;
   const pollIntervalMs = config.outbox?.pollIntervalMs || 25;
-  const workerInterval =
-    worker &&
-    setInterval(() => {
-      worker.tick();
-    }, pollIntervalMs);
+  let workerTick = Promise.resolve();
+  function runWorkerTick() {
+    if (!worker) return Promise.resolve();
+    workerTick = workerTick
+      .catch(() => {})
+      .then(() => worker.tick())
+      .catch(() => {});
+    return workerTick;
+  }
+  const workerInterval = worker && setInterval(() => void runWorkerTick(), pollIntervalMs);
 
   const mail = {
     transportName,
@@ -202,8 +214,11 @@ export function createMailPort(config) {
         message.updated_at = new Date().toISOString();
         message.links = extractLinks({ html: message.html, text: message.text });
         outbox.put(message);
+        if (payload.idempotencyKey) {
+          idempotency.set(payload.idempotencyKey, message);
+        }
         if (worker) {
-          worker.tick();
+          runWorkerTick();
         }
         return deepClone(message);
       }
@@ -312,6 +327,12 @@ export function createMailPort(config) {
         }
         return null;
       },
+    },
+    async close() {
+      if (workerInterval) {
+        clearInterval(workerInterval);
+      }
+      await workerTick;
     },
   };
 

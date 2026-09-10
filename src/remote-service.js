@@ -24,11 +24,22 @@ function parseAuthorization(req) {
   return header.slice("Bearer ".length).trim();
 }
 
-async function readJsonBody(req) {
+async function readJsonBody(req, maxBodyBytes) {
+  let total = 0;
   const chunks = [];
-  for await (const chunk of req) chunks.push(chunk);
+  for await (const chunk of req) {
+    total += chunk.length;
+    if (total > maxBodyBytes) {
+      throw new MailPortError(ERROR_CODES.MAIL_MESSAGE_TOO_LARGE, "Request body too large");
+    }
+    chunks.push(chunk);
+  }
   if (chunks.length === 0) return {};
-  return JSON.parse(Buffer.concat(chunks).toString("utf8"));
+  try {
+    return JSON.parse(Buffer.concat(chunks).toString("utf8"));
+  } catch {
+    throw new MailPortError(ERROR_CODES.MAIL_DELIVERY_FAILED, "Invalid JSON body");
+  }
 }
 
 function assertAuthorized(req, apiKey) {
@@ -41,7 +52,13 @@ function assertAuthorized(req, apiKey) {
 
 export function createMailPortService(
   mail,
-  { host = "127.0.0.1", port = 8789, apiKey } = {}
+  {
+    host = "127.0.0.1",
+    port = 8789,
+    apiKey,
+    maxBodyBytes = 256 * 1024,
+    testEndpointsEnabled = true,
+  } = {}
 ) {
   const server = http.createServer(async (req, res) => {
     try {
@@ -59,7 +76,7 @@ export function createMailPortService(
       }
 
       if (req.method === "POST" && url.pathname === "/v1/messages") {
-        const body = await readJsonBody(req);
+        const body = await readJsonBody(req, maxBodyBytes);
         const message = body.template
           ? await mail.send(body.template, body.payload || {})
           : await mail.send(body);
@@ -67,28 +84,46 @@ export function createMailPortService(
       }
 
       if (req.method === "GET" && url.pathname === "/v1/messages") {
-        return sendJson(res, 200, mail.list(parseQueryFilters(url.searchParams)));
+        return sendJson(res, 200, await mail.list(parseQueryFilters(url.searchParams)));
       }
 
       if (req.method === "GET" && url.pathname.startsWith("/v1/messages/")) {
         const id = decodeURIComponent(url.pathname.split("/").pop());
-        const message = mail.get(id);
+        const message = await mail.get(id);
         if (!message) return sendJson(res, 404, { error: "not_found" });
         return sendJson(res, 200, message);
       }
 
       if (req.method === "GET" && url.pathname === "/v1/test/messages") {
-        return sendJson(res, 200, mail.test.list(parseQueryFilters(url.searchParams)));
+        if (!testEndpointsEnabled) {
+          throw new MailPortError(
+            ERROR_CODES.MAIL_TEST_TRANSPORT_DISABLED,
+            "Test API is disabled"
+          );
+        }
+        return sendJson(res, 200, await mail.test.list(parseQueryFilters(url.searchParams)));
       }
 
       if (req.method === "GET" && url.pathname.startsWith("/v1/test/messages/")) {
+        if (!testEndpointsEnabled) {
+          throw new MailPortError(
+            ERROR_CODES.MAIL_TEST_TRANSPORT_DISABLED,
+            "Test API is disabled"
+          );
+        }
         const id = decodeURIComponent(url.pathname.split("/").pop());
-        const message = mail.test.get(id);
+        const message = await mail.test.get(id);
         if (!message) return sendJson(res, 404, { error: "not_found" });
         return sendJson(res, 200, message);
       }
 
       if (req.method === "DELETE" && url.pathname === "/v1/test/messages") {
+        if (!testEndpointsEnabled) {
+          throw new MailPortError(
+            ERROR_CODES.MAIL_TEST_TRANSPORT_DISABLED,
+            "Test API is disabled"
+          );
+        }
         mail.test.clear();
         return sendJson(res, 200, { cleared: true });
       }
@@ -121,6 +156,9 @@ export function createMailPortService(
       await new Promise((resolve, reject) =>
         server.close((error) => (error ? reject(error) : resolve()))
       );
+      if (typeof mail.close === "function") {
+        await mail.close();
+      }
     },
   };
 }
