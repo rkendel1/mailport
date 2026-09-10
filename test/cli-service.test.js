@@ -55,8 +55,8 @@ test("service command boots with smtp transport configured in environment", asyn
     assert.deepEqual(health, { ok: true });
   } finally {
     if (child.exitCode === null) {
-      child.kill("SIGTERM");
       await new Promise((resolve) => {
+        if (child.exitCode !== null) return resolve();
         const timer = setTimeout(() => {
           if (child.exitCode === null) child.kill("SIGKILL");
           resolve();
@@ -66,6 +66,7 @@ test("service command boots with smtp transport configured in environment", asyn
           clearTimeout(timer);
           resolve();
         });
+        child.kill("SIGTERM");
       });
     }
   }
