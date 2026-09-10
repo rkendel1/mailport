@@ -78,6 +78,7 @@ function createTransport(name, explicitTransport, environment = process.env) {
     host: explicitTransport?.host || environment.MAILPORT_SMTP_HOST,
     port: Number(explicitTransport?.port || environment.MAILPORT_SMTP_PORT || 25),
     secure: explicitTransport?.secure ?? environment.MAILPORT_SMTP_SECURE === "true",
+    requireTLS: explicitTransport?.requireTLS ?? (environment.MAILPORT_SMTP_REQUIRE_TLS === "true" || environment.NODE_ENV === "production"),
     username: explicitTransport?.username || environment.MAILPORT_SMTP_USERNAME,
     password: explicitTransport?.password || environment.MAILPORT_SMTP_PASSWORD,
   });
@@ -369,15 +370,28 @@ export function createMailPort(config) {
     async status() {
       const items = durableOutboxEnabled ? outbox.list() : [...messages.values()];
       const count = (status) => items.filter((m) => m.status === status).length;
+      const queued = items.filter((m) => ["queued", "retrying"].includes(m.status));
+      const transportAttempts = items.reduce((total, item) => total + (item.attempt_count || item.attempt || 0), 0);
+      const latencies = items.filter((item) => item.sent_at).map((item) => Date.parse(item.sent_at) - Date.parse(item.accepted_at || item.created_at));
       return { transport: transportName, worker: { running: Boolean(worker), active: worker?.active || 0 },
-        outbox: { queued: count("queued"), retrying: count("retrying"), failed: count("failed") } };
+        volume: { accepted: items.length, sent: count("sent"), delivered: count("delivered"), bounced: count("bounced"), failed: count("failed") },
+        outbox: { queued: count("queued"), retrying: count("retrying"), leased: count("leased") + count("sending"),
+          failed: count("failed"), oldest_queued_age_ms: queued.length ? Date.now() - Math.min(...queued.map((item) => Date.parse(item.queued_at || item.created_at))) : 0 },
+        delivery: { attempts: transportAttempts, successes: items.filter((item) => ["sent", "delivered", "bounced"].includes(item.status)).length,
+          failures: count("failed"), average_latency_ms: latencies.length ? Math.round(latencies.reduce((a, b) => a + b, 0) / latencies.length) : null } };
+    },
+    recordDeliveryEvent(event) {
+      if (!durableOutboxEnabled || typeof outbox.recordDeliveryEvent !== "function") return null;
+      return outbox.recordDeliveryEvent(event);
     },
     async close() {
+      worker?.stop();
       if (workerInterval) {
         clearInterval(workerInterval);
       }
       await workerTick;
     },
+    stopWorker() { worker?.stop(); if (workerInterval) clearInterval(workerInterval); },
   };
 
   if (workerInterval && typeof workerInterval.unref === "function") {

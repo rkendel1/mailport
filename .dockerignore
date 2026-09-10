@@ -1,0 +1,8 @@
+.git
+.mailport
+node_modules
+test
+fixtures
+docs
+*.log
+.env*

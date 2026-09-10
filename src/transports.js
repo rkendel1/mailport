@@ -30,10 +30,19 @@ export class SmtpTransport {
   async send(message) {
     const { host, port = this.options.secure ? 465 : 25, secure = false, username, password } = this.options;
     if (!host) throw new MailPortError(ERROR_CODES.MAIL_DELIVERY_FAILED, "SMTP host is required");
-    const socket = secure ? tls.connect({ host, port, servername: host }) : net.connect({ host, port });
+    let socket = secure ? tls.connect({ host, port, servername: host }) : net.connect({ host, port });
     try {
       await smtpCommand(socket, null, [220]);
-      await smtpCommand(socket, `EHLO ${this.options.helo || "mailport.local"}`, [250]);
+      let capabilities = await smtpCommand(socket, `EHLO ${this.options.helo || "mailport.local"}`, [250]);
+      if (!secure && /STARTTLS/i.test(capabilities)) {
+        await smtpCommand(socket, "STARTTLS", [220]);
+        socket = await new Promise((resolve, reject) => {
+          const secured = tls.connect({ socket, servername: host }, () => resolve(secured)); secured.once("error", reject);
+        });
+        capabilities = await smtpCommand(socket, `EHLO ${this.options.helo || "mailport.local"}`, [250]);
+      } else if (!secure && this.options.requireTLS) {
+        throw new Error("SMTP server does not advertise STARTTLS");
+      }
       if (username) {
         await smtpCommand(socket, "AUTH LOGIN", [334]);
         await smtpCommand(socket, Buffer.from(username).toString("base64"), [334]);

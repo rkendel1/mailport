@@ -74,6 +74,18 @@ export class FileMailStore {
   findByIdempotencyKey(key) { return key ? this.list().find((m) => m.idempotencyKey === key) || null : null; }
   clear() { return this.#locked(() => { this.memory.clear(); this.#commit(); }); }
   deleteWhere(predicate) { return this.#locked(() => { for (const [id, item] of this.memory) if (predicate(item)) this.memory.delete(id); this.#commit(); }); }
+  recordDeliveryEvent({ message_id, transport_message_id, type, recipient, timestamp = iso(), metadata = {} }) {
+    return this.#locked(() => {
+      const message = [...this.memory.values()].find((item) => item.message_id === message_id ||
+        (transport_message_id && item.transport?.message_id === transport_message_id));
+      if (!message) return null;
+      if (!["delivered", "bounced", "complained"].includes(type)) throw new Error(`Unsupported delivery event: ${type}`);
+      if (!(["sent", "delivered"].includes(message.status))) return clone(message);
+      const next = { ...message, status: type, [`${type}_at`]: timestamp,
+        events: [...(message.events || []), event(`message.${type}`, message, { recipient, metadata })], updated_at: timestamp };
+      this.memory.set(next.message_id, next); this.#commit(); return clone(next);
+    });
+  }
   claimNext(workerId, { leaseMs = 30_000 } = {}) {
     return this.#locked(() => {
       const now = Date.now();
@@ -120,12 +132,13 @@ export function createOutbox({ filePath, store } = {}) { return store || new Fil
 export function createOutboxWorker({ outbox, transport, workerId = `worker_${randomUUID()}`,
   maxAttempts = 5, retryBaseMs = 250, leaseMs = 30_000 } = {}) {
   let running = false; let active = 0;
+  let stopping = false;
   return {
     get running() { return running; }, get active() { return active; }, workerId,
     async tick() {
       if (running) return; running = true;
       try {
-        while (true) {
+        while (!stopping) {
           const message = await outbox.claimNext(workerId, { leaseMs });
           if (!message) break;
           active += 1;
@@ -146,5 +159,6 @@ export function createOutboxWorker({ outbox, transport, workerId = `worker_${ran
         }
       } finally { running = false; }
     },
+    stop() { stopping = true; },
   };
 }

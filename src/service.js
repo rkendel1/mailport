@@ -1,9 +1,12 @@
 import { createMailPort } from "./mailport.js";
 import { createMailPortService } from "./remote-service.js";
 import { FileOperationsStore } from "./operations.js";
+import { validateProductionConfig } from "./production-config.js";
+import { createDeliveryEventSource } from "./delivery-events.js";
 
 export function createMailService(options = {}) {
   const environment = options.environment || process.env;
+  const production = validateProductionConfig(options, environment);
   const worker = options.worker || {};
   const transport = options.transport || { type: environment.MAILPORT_TRANSPORT || "local" };
   const transportConfig = typeof transport === "string" ? transport : { ...transport, kind: transport.kind || transport.type };
@@ -20,10 +23,13 @@ export function createMailService(options = {}) {
   const operations = options.operationsStore || new FileOperationsStore({ filePath: options.operations?.filePath || environment.MAILPORT_OPERATIONS,
     resolver: options.operations?.resolver });
   for (const key of options.apiKeys || []) operations.addKey(key);
+  if (environment.MAILPORT_DKIM_DOMAIN && environment.MAILPORT_DKIM_PRIVATE_KEY)
+    operations.setSigningKey(environment.MAILPORT_DKIM_DOMAIN, environment.MAILPORT_DKIM_PRIVATE_KEY.replace(/\\n/g, "\n"));
+  const deliveryEvents = createDeliveryEventSource({ mail, operations, ...(options.deliveryEvents || {}) });
   const server = createMailPortService(mail, { host: options.host, port: options.port || Number(environment.PORT) || 8789,
     apiKey: options.apiKey || environment.MAILPORT_API_KEY,
     adminKey: options.adminKey || environment.MAILPORT_ADMIN_KEY, operations, rateLimits: options.limits,
-    applicationId: options.applicationId || environment.MAILPORT_APPLICATION_ID || "app",
+    applicationId: options.applicationId || environment.MAILPORT_APPLICATION_ID || "app", production, deliveryEvents,
     maxBodyBytes: options.maxBodyBytes, testEndpointsEnabled: options.testEndpointsEnabled ?? transportConfig.kind !== "smtp" });
-  return { ...server, mail, operations, config: options };
+  return { ...server, mail, operations, deliveryEvents, production, config: options };
 }

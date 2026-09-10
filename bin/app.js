@@ -1,8 +1,7 @@
 #!/usr/bin/env node
-import { createMailPort } from "../src/mailport.js";
+import { createMailPort, createRemoteMailPortClient } from "@mailerport/sdk";
 import { createLocalInboxServer } from "../src/local-inbox-server.js";
-import { createRemoteMailPortClient } from "../src/remote-client.js";
-import { createMailService } from "../src/service.js";
+import { createMailService } from "@mailerport/service";
 
 function readFlag(args, name) {
   const i = args.indexOf(name);
@@ -87,6 +86,14 @@ async function main() {
     });
     await service.start();
     console.log(`MailPort service listening on http://${host}:${port}`);
+    let shuttingDown = false;
+    const shutdown = async () => {
+      if (shuttingDown) return; shuttingDown = true;
+      const timeout = setTimeout(() => process.exit(1), Number(process.env.MAILPORT_SHUTDOWN_TIMEOUT_MS || 30_000));
+      timeout.unref();
+      try { await service.stop(); process.exit(0); } catch { process.exit(1); }
+    };
+    process.on("SIGTERM", shutdown); process.on("SIGINT", shutdown);
     return;
   }
 

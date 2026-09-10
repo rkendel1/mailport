@@ -1,12 +1,16 @@
 {
-  "name": "mailport",
-  "version": "1.0.0",
+  "name": "mailport-workspace",
+  "version": "0.1.0",
   "private": true,
+  "workspaces": ["packages/*"],
   "type": "module",
   "bin": {
     "app": "./bin/app.js"
   },
   "scripts": {
-    "test": "node --test"
+    "test": "node --test",
+    "pack:all": "npm pack --workspaces --if-present",
+    "publish:all": "npm publish --workspaces --if-present --access public",
+    "publish:packages": "node scripts/publish-packages.js"
   }
 }

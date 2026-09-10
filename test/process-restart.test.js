@@ -18,6 +18,7 @@ function start(env) {
   });
 }
 const stop = (child) => new Promise((resolve) => { child.once("exit", resolve); child.kill("SIGKILL"); });
+const terminate = (child) => new Promise((resolve) => { child.once("exit", resolve); child.kill("SIGTERM"); });
 
 test("accepted mail survives a real service process restart", async () => {
   const port = await freePort();
@@ -41,4 +42,29 @@ test("accepted mail survives a real service process restart", async () => {
   await stop(child);
   assert.equal(message.message_id, accepted.message_id);
   assert.equal(message.status, "sent");
+});
+
+test("SIGTERM drains an active delivery exactly once", async () => {
+  const port = await freePort();
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "mailport-term-"));
+  const outbox = path.join(directory, "outbox.json"); const marker = path.join(directory, "deliveries.txt");
+  const env = { TEST_PORT: String(port), TEST_OUTBOX: outbox, TEST_WORKER: "on",
+    TEST_DELIVERY_MARKER: marker, TEST_DELIVERY_DELAY: "100" };
+  let child = await start(env);
+  const accepted = await fetch(`http://127.0.0.1:${port}/v1/messages`, { method: "POST",
+    headers: { authorization: "Bearer test-key", "content-type": "application/json" },
+    body: JSON.stringify({ identity: "system", to: "user@example.test", subject: "Drain", text: "Drain" }) }).then((item) => item.json());
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    const current = await fetch(`http://127.0.0.1:${port}/v1/messages/${accepted.message_id}`,
+      { headers: { authorization: "Bearer test-key" } }).then((item) => item.json());
+    if (current.status === "sending") break;
+    await new Promise((resolve) => setTimeout(resolve, 2));
+  }
+  await terminate(child);
+  child = await start(env);
+  const final = await fetch(`http://127.0.0.1:${port}/v1/messages/${accepted.message_id}`,
+    { headers: { authorization: "Bearer test-key" } }).then((item) => item.json());
+  await stop(child);
+  assert.equal(final.status, "sent");
+  assert.equal(fs.readFileSync(marker, "utf8").trim().split("\n").length, 1);
 });

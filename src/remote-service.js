@@ -72,7 +72,7 @@ export function createMailPortService(
     apiKey,
     maxBodyBytes = 256 * 1024,
     testEndpointsEnabled = true,
-    adminKey, operations, rateLimits, applicationId,
+    adminKey, operations, rateLimits, applicationId, production, deliveryEvents,
   } = {}
 ) {
   const server = http.createServer(async (req, res) => {
@@ -84,6 +84,8 @@ export function createMailPortService(
       }
       if (req.method === "GET" && url.pathname === "/ready") {
         await mail.list();
+        if (production?.production && operations && !operations.signingReady())
+          return sendJson(res, 503, { ready: false, reason: "signing_configuration_unavailable" });
         return sendJson(res, 200, { ready: true });
       }
 
@@ -92,7 +94,10 @@ export function createMailPortService(
 
       if (req.method === "GET" && url.pathname === "/v1/status") {
         const status = typeof mail.status === "function" ? await mail.status() : {};
-        return sendJson(res, 200, { service: "mailport", version: "1.0.0", ...status });
+        const suppressions = operations?.listSuppressions({ admin: true }) || [];
+        return sendJson(res, 200, { service: "mailport", version: "1.0.0", ...status,
+          suppression: { suppressed: suppressions.length, hard_bounces: suppressions.filter((item) => item.reason === "hard_bounce").length,
+            complaints: suppressions.filter((item) => item.reason === "complaint").length } });
       }
 
       if (req.method === "POST" && url.pathname === "/v1/domains") {
@@ -117,6 +122,10 @@ export function createMailPortService(
       }
       if (req.method === "POST" && url.pathname === "/v1/suppressions") {
         requireAdmin(principal); return sendJson(res, 201, operations.addSuppression(await readJsonBody(req, maxBodyBytes)));
+      }
+      if (req.method === "POST" && url.pathname === "/v1/delivery-events") {
+        requireAdmin(principal);
+        return sendJson(res, 202, publicMessage(await deliveryEvents.consume(await readJsonBody(req, maxBodyBytes))));
       }
       if (req.method === "GET" && url.pathname === "/v1/suppressions") {
         requireAdmin(principal); return sendJson(res, 200, operations.listSuppressions(principal));
@@ -233,6 +242,7 @@ export function createMailPortService(
       });
     },
     async stop() {
+      if (typeof mail.stopWorker === "function") mail.stopWorker();
       await new Promise((resolve, reject) =>
         server.close((error) => (error ? reject(error) : resolve()))
       );

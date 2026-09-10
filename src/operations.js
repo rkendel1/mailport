@@ -14,11 +14,17 @@ export class FileOperationsStore {
     this.resolver = resolver;
     this.state = { domains: [], identities: [], suppressions: [], keys: [] };
     this.rate = new Map();
+    this.signingKeys = new Map();
     this.#load();
   }
   #load() {
     if (!this.filePath || !fs.existsSync(this.filePath)) return;
     this.state = { ...this.state, ...JSON.parse(fs.readFileSync(this.filePath, "utf8")) };
+    let migratedSecret = false;
+    for (const domain of this.state.domains) {
+      if (domain.dkim?.private_key) { this.signingKeys.set(domain.domain, domain.dkim.private_key); delete domain.dkim.private_key; migratedSecret = true; }
+    }
+    if (migratedSecret) this.#save();
   }
   #save() {
     if (!this.filePath) return;
@@ -32,14 +38,22 @@ export class FileOperationsStore {
     const existing = this.state.domains.find((item) => item.domain === domain);
     if (existing) return clone(existing);
     const selector = `mailport-${crypto.randomBytes(6).toString("hex")}`;
-    const { publicKey, privateKey } = crypto.generateKeyPairSync("rsa", { modulusLength: 2048,
-      publicKeyEncoding: { type: "spki", format: "pem" }, privateKeyEncoding: { type: "pkcs8", format: "pem" } });
+    let privateKey = this.signingKeys.get(domain);
+    let publicKey;
+    if (privateKey) {
+      publicKey = crypto.createPublicKey(privateKey).export({ type: "spki", format: "pem" });
+    } else {
+      const generated = crypto.generateKeyPairSync("rsa", { modulusLength: 2048,
+        publicKeyEncoding: { type: "spki", format: "pem" }, privateKeyEncoding: { type: "pkcs8", format: "pem" } });
+      publicKey = generated.publicKey; privateKey = generated.privateKey;
+    }
     const publicValue = publicKey.replace(/-----[^-]+-----|\s/g, "");
     const item = { domain, status: "pending", created_at: now(),
       spf: { status: "pending", name: domain, record: "v=spf1 include:_spf.mailport.local ~all" },
       dkim: { status: "pending", selector, name: `${selector}._domainkey.${domain}`,
-        record: `v=DKIM1; k=rsa; p=${publicValue}`, private_key: privateKey },
+        record: `v=DKIM1; k=rsa; p=${publicValue}` },
       dmarc: { status: "recommended", name: `_dmarc.${domain}`, record: "v=DMARC1; p=none; rua=mailto:dmarc@" + domain } };
+    this.signingKeys.set(domain, privateKey);
     this.state.domains.push(item); this.#save(); return this.#publicDomain(item);
   }
   #publicDomain(item) { const value = clone(item); if (value?.dkim) delete value.dkim.private_key; return value; }
@@ -70,8 +84,11 @@ export class FileOperationsStore {
     const identity = this.state.identities.find((item) => item.identity === identityName && item.status === "active" &&
       (!item.application_id || item.application_id === principal.application_id));
     const domain = identity && this.state.domains.find((item) => item.domain === identity.domain && item.status === "active");
-    return domain ? { domain: domain.domain, selector: domain.dkim.selector, privateKey: domain.dkim.private_key } : null;
+    const privateKey = domain && this.signingKeys.get(domain.domain);
+    return domain && privateKey ? { domain: domain.domain, selector: domain.dkim.selector, privateKey } : null;
   }
+  setSigningKey(domain, privateKey) { this.signingKeys.set(domain, privateKey); }
+  signingReady() { return this.state.domains.filter((item) => item.status === "active").every((item) => this.signingKeys.has(item.domain)); }
   addSuppression({ email, reason = "manual", source = "admin", application_id = null, tenant_id = null }) {
     const item = { email: normalizeEmail(email), reason, source, application_id, tenant_id, created_at: now() };
     this.state.suppressions = this.state.suppressions.filter((value) => !(value.email === item.email && value.application_id === application_id));
