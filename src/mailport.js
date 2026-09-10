@@ -158,6 +158,7 @@ export function createMailPort(config) {
         message.last_error = error.message;
         message.updated_at = new Date().toISOString();
         if (error instanceof MailPortError) {
+          error.details = { ...(error.details || {}), message_id: message.message_id };
           throw error;
         }
         throw new MailPortError(ERROR_CODES.MAIL_DELIVERY_FAILED, error.message, {

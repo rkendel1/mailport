@@ -35,6 +35,13 @@ test("serves test inbox and test message API", async () => {
     const detailRes = await fetch(`http://127.0.0.1:8790/mail/${sent.message_id}`);
     const detailHtml = await detailRes.text();
     assert.match(detailHtml, /MailPort works\./);
+
+    const clearRes = await fetch("http://127.0.0.1:8790/v1/test/messages", {
+      method: "DELETE",
+    });
+    const cleared = await clearRes.json();
+    assert.equal(cleared.cleared, true);
+    assert.equal(mail.test.list().length, 0);
   } finally {
     await server.stop();
   }

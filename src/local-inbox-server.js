@@ -112,7 +112,7 @@ export function createLocalInboxServer(
       }
 
       if (req.method === "GET" && url.pathname.startsWith("/v1/test/messages/")) {
-        const id = url.pathname.split("/").pop();
+        const id = decodeURIComponent(url.pathname.split("/").pop());
         const message = mail.test.get(id);
         if (!message) return sendJson(res, 404, { error: "not_found" });
         return sendJson(res, 200, message);

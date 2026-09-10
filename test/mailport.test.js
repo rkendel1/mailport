@@ -84,6 +84,8 @@ test("surfaces transport delivery errors", async () => {
         subject: "Hello",
         text: "Hi",
       }),
-    (error) => error.code === "MAIL_DELIVERY_FAILED"
+    (error) =>
+      error.code === "MAIL_DELIVERY_FAILED" &&
+      Boolean(error.details && error.details.message_id)
   );
 });
