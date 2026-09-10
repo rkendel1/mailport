@@ -2,6 +2,7 @@ FROM node:22-alpine AS runtime
 WORKDIR /opt/mailport
 ENV NODE_ENV=production
 COPY --chown=node:node package.json package-lock.json ./
+COPY --chown=node:node packages ./packages
 RUN npm ci --omit=dev && npm cache clean --force
 COPY --chown=node:node bin ./bin
 COPY --chown=node:node src ./src
