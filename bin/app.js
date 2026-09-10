@@ -35,19 +35,24 @@ async function main() {
     process.env.FELTDB_MAIL_TRANSPORT ||
     process.env.MAILPORT_TRANSPORT ||
     "memory";
-  const mail = createMailPort({
-    applicationId: process.env.MAILPORT_APPLICATION_ID || "app",
-    transport,
-    identities: { system: "notifications@example.test" },
-    testEndpointsEnabled: true,
-  });
+  let mail;
+  const getMail = () => {
+    if (mail) return mail;
+    mail = createMailPort({
+      applicationId: process.env.MAILPORT_APPLICATION_ID || "app",
+      transport,
+      identities: { system: "notifications@example.test" },
+      testEndpointsEnabled: true,
+    });
+    return mail;
+  };
   const remote = process.env.MAILPORT_URL ? createRemoteMailPortClient({ baseUrl: process.env.MAILPORT_URL,
     apiKey: process.env.MAILPORT_ADMIN_KEY || process.env.MAILPORT_API_KEY }) : null;
 
   if (args[1] === "status") {
     if (process.env.MAILPORT_URL) {
       console.log(JSON.stringify(await remote.status(), null, 2));
-    } else printStatus(mail);
+    } else printStatus(getMail());
     return;
   }
 
@@ -62,7 +67,7 @@ async function main() {
     console.log(JSON.stringify(await remote.operations.domains.verify(args[3]), null, 2)); return; }
 
   if (args[1] === "dev") {
-    const server = createLocalInboxServer(mail);
+    const server = createLocalInboxServer(getMail());
     await server.start();
     console.log("MailPort local inbox:");
     console.log("http://127.0.0.1:8788/mail");
@@ -108,7 +113,7 @@ async function main() {
         "Usage: app mail send --to <email> --from <identity> --subject <subject> --text <text> [--html <html>]"
       );
     }
-    const message = await mail.send({
+    const message = await getMail().send({
       identity: from,
       to,
       subject,
@@ -120,7 +125,7 @@ async function main() {
   }
 
   if (args[1] === "test" && args[2] === "clear") {
-    mail.test.clear();
+    getMail().test.clear();
     console.log("Cleared test messages.");
     return;
   }
@@ -133,7 +138,7 @@ async function main() {
   if (args[1] === "test" && args[2] === "wait") {
     const to = readFlag(args, "--to");
     const template = readFlag(args, "--template");
-    const msg = await mail.test.waitFor({ to, template, timeoutMs: 5000 });
+    const msg = await getMail().test.waitFor({ to, template, timeoutMs: 5000 });
     console.log(JSON.stringify(msg, null, 2));
     return;
   }
