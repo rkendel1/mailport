@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import crypto from "node:crypto";
 import { MailPortError, ERROR_CODES } from "./errors.js";
 
 function header(value) {
@@ -33,5 +34,14 @@ export function createMimeMessage(message) {
       encode(Buffer.isBuffer(item.content) ? item.content : Buffer.from(String(item.content || ""))));
   }
   if (attachments.length) lines.push(`--${boundary}--`);
-  return lines.join("\r\n");
+  const mime = lines.join("\r\n");
+  if (!message.dkim?.privateKey) return mime;
+  const split = mime.indexOf("\r\n\r\n");
+  const body = mime.slice(split + 4).replace(/\r\n*$/, "\r\n");
+  const bodyHash = crypto.createHash("sha256").update(body).digest("base64");
+  const fields = lines.slice(0, lines.indexOf("")).filter((line) => /^(from|to|subject|date|message-id):/i.test(line));
+  const unsigned = `v=1; a=rsa-sha256; c=simple/simple; d=${message.dkim.domain}; s=${message.dkim.selector}; h=from:to:subject:date:message-id; bh=${bodyHash}; b=`;
+  const signingData = `${fields.join("\r\n")}\r\ndkim-signature:${unsigned}`;
+  const signature = crypto.sign("RSA-SHA256", Buffer.from(signingData), message.dkim.privateKey).toString("base64");
+  return `DKIM-Signature: ${unsigned}${signature}\r\n${mime}`;
 }

@@ -6,5 +6,6 @@ export { createRemoteMailPortClient } from "./remote-client.js";
 export { FileMailStore, createOutbox, createOutboxWorker } from "./outbox.js";
 export { createMimeMessage } from "./mime.js";
 export { createSmtpTransport, SmtpTransport, MemoryTransport, LocalTransport } from "./transports.js";
+export { FileOperationsStore } from "./operations.js";
 export { parseMailDsl, generateMailContractSnapshot } from "./dsl.js";
 export { MailPortError, ERROR_CODES } from "./errors.js";

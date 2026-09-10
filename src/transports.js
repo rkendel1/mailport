@@ -3,8 +3,8 @@ import tls from "node:tls";
 import { MailPortError, ERROR_CODES } from "./errors.js";
 import { createMimeMessage } from "./mime.js";
 
-export class MemoryTransport { constructor() { this.kind = "memory"; } async send() { return { status: "sent" }; } }
-export class LocalTransport { constructor() { this.kind = "local"; } async send() { return { status: "sent" }; } }
+export class MemoryTransport { constructor() { this.kind = "memory"; } async send() { return { status: "sent", transport: "memory" }; } }
+export class LocalTransport { constructor() { this.kind = "local"; } async send() { return { status: "sent", transport: "local" }; } }
 
 function smtpCommand(socket, command, expected) {
   return new Promise((resolve, reject) => {
@@ -46,7 +46,7 @@ export class SmtpTransport {
       const mime = createMimeMessage(message).replace(/^\./gm, "..");
       await smtpCommand(socket, `${mime}\r\n.`, [250]);
       await smtpCommand(socket, "QUIT", [221]);
-      return { status: "sent" };
+      return { status: "sent", transport: "smtp", message_id: `<${message.message_id}@mailport>` };
     } catch (error) {
       throw new MailPortError(ERROR_CODES.MAIL_DELIVERY_FAILED, error.message);
     } finally { socket.destroy(); }

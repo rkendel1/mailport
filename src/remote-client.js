@@ -72,6 +72,15 @@ export function createRemoteMailPortClient({
       return request(`/v1/messages${toQueryString(filters)}`);
     },
     async status() { return request("/v1/status"); },
+    operations: {
+      domains: { list: () => request("/v1/domains"), get: (domain) => request(`/v1/domains/${encodeURIComponent(domain)}`),
+        add: (domain) => request("/v1/domains", { method: "POST", body: JSON.stringify({ domain }) }),
+        verify: (domain) => request(`/v1/domains/${encodeURIComponent(domain)}/verify`, { method: "POST" }),
+        remove: (domain) => request(`/v1/domains/${encodeURIComponent(domain)}`, { method: "DELETE" }) },
+      identities: { list: () => request("/v1/identities"), add: (identity) => request("/v1/identities", { method: "POST", body: JSON.stringify(identity) }) },
+      suppressions: { list: () => request("/v1/suppressions"), add: (suppression) => request("/v1/suppressions", { method: "POST", body: JSON.stringify(suppression) }) },
+      events: (messageId) => request(`/v1/messages/${encodeURIComponent(messageId)}/events`),
+    },
     test: {
       async list(filters = {}) {
         if (!testEndpointsEnabled) {

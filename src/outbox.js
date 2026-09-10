@@ -6,6 +6,9 @@ import { MailPortError, ERROR_CODES } from "./errors.js";
 const sleepBuffer = new Int32Array(new SharedArrayBuffer(4));
 const clone = (value) => structuredClone(value);
 const iso = (time = Date.now()) => new Date(time).toISOString();
+const event = (type, message, details = {}) => ({ event_id: `evt_${randomUUID().replaceAll("-", "")}`,
+  message_id: message.message_id, timestamp: iso(), event_type: type, attempt: message.attempt || 0,
+  worker_id: message.claimed_by || null, ...details });
 
 export class FileMailStore {
   constructor({ filePath } = {}) {
@@ -62,6 +65,7 @@ export class FileMailStore {
         const existing = [...this.memory.values()].find((m) => m.idempotencyKey === message.idempotencyKey);
         if (existing) return clone(existing);
       }
+      message.events ||= [event("message.accepted", message), event("message.queued", message)];
       this.memory.set(message.message_id, clone(message)); this.#commit(); return clone(message);
     });
   }
@@ -69,6 +73,7 @@ export class FileMailStore {
   list() { this.#reload(); return [...this.memory.values()].map(clone); }
   findByIdempotencyKey(key) { return key ? this.list().find((m) => m.idempotencyKey === key) || null : null; }
   clear() { return this.#locked(() => { this.memory.clear(); this.#commit(); }); }
+  deleteWhere(predicate) { return this.#locked(() => { for (const [id, item] of this.memory) if (predicate(item)) this.memory.delete(id); this.#commit(); }); }
   claimNext(workerId, { leaseMs = 30_000 } = {}) {
     return this.#locked(() => {
       const now = Date.now();
@@ -80,7 +85,10 @@ export class FileMailStore {
       if (!candidate) return null;
       const next = { ...candidate, status: "leased", claimed_by: workerId,
         claim_token: `claim_${randomUUID().replaceAll("-", "")}`,
-        lease_expires_at: iso(now + leaseMs), attempt: (candidate.attempt || 0) + 1, updated_at: iso(now) };
+        lease_expires_at: iso(now + leaseMs), leased_at: iso(now), attempt: (candidate.attempt || 0) + 1,
+        attempt_count: (candidate.attempt || 0) + 1, updated_at: iso(now) };
+      next.events = [...(next.events || []), event("message.claimed", next), event("message.sending", next)];
+      next.status = "sending"; next.sending_at = iso(now);
       this.memory.set(next.message_id, next); this.#commit(); return clone(next);
     });
   }
@@ -94,12 +102,16 @@ export class FileMailStore {
     });
   }
   async complete(id, token, result = {}) { return this.#finish(id, token, (m) => ({ ...m, status: "sent", delivery: result,
-    sent_at: iso(), claim_token: null, claimed_by: null, lease_expires_at: null, next_retry_at: null, updated_at: iso() })); }
+    transport: { type: result.transport || result.type || null, message_id: result.message_id || null, metadata: result.metadata || {} },
+    events: [...(m.events || []), event("message.sent", m, { transport: result.transport || result.type || null })],
+    sent_at: iso(), claim_token: null, claimed_by: null, lease_expires_at: null, next_retry_at: null, next_attempt_at: null, updated_at: iso() })); }
   async retry(id, token, result = {}) { return this.#finish(id, token, (m) => ({ ...m, status: "retrying",
     last_error: result.error?.message || result.error || null, next_retry_at: result.nextRetryAt,
+    next_attempt_at: result.nextRetryAt, events: [...(m.events || []), event("message.retry_scheduled", m, { error_code: result.error?.code || null })],
     claim_token: null, claimed_by: null, lease_expires_at: null, updated_at: iso() })); }
   async fail(id, token, result = {}) { return this.#finish(id, token, (m) => ({ ...m, status: "failed",
     last_error: result.error?.message || result.error || null, failed_at: iso(), claim_token: null,
+    events: [...(m.events || []), event("message.failed", m, { error_code: result.error?.code || null })],
     claimed_by: null, lease_expires_at: null, next_retry_at: null, updated_at: iso() })); }
 }
 

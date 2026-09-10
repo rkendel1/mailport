@@ -139,7 +139,7 @@ export function createMailPort(config) {
       const isTemplateSend = typeof templateOrPayload === "string";
       const payload = isTemplateSend ? { ...(maybePayload || {}) } : { ...templateOrPayload };
 
-      if (!payload.identity || !identities[payload.identity]) {
+      if (!payload.identity || (!identities[payload.identity] && !payload.__identityAddress)) {
         throw new MailPortError(
           ERROR_CODES.MAIL_IDENTITY_NOT_FOUND,
           `Unknown identity: ${payload.identity || "(missing)"}`
@@ -192,10 +192,10 @@ export function createMailPort(config) {
       const messageId = `msg_${randomUUID().replace(/-/g, "")}`;
       const message = {
         message_id: messageId,
-        application_id: config.applicationId || "app",
-        tenant_id: payload.tenantId || null,
+        application_id: payload.__applicationId || config.applicationId || "app",
+        tenant_id: payload.__tenantId ?? payload.tenantId ?? null,
         identity: payload.identity,
-        from: identities[payload.identity],
+        from: payload.__identityAddress || identities[payload.identity],
         to: normalizeRecipients(payload.to),
         cc: normalizeRecipients(payload.cc),
         bcc: normalizeRecipients(payload.bcc),
@@ -211,7 +211,9 @@ export function createMailPort(config) {
           ? JSON.stringify({ ...payload, idempotencyKey: undefined })
           : null,
         attachments,
+        dkim: payload.__dkim || null,
         status: "accepted",
+        accepted_at: now,
         created_at: now,
         updated_at: now,
       };
@@ -235,6 +237,7 @@ export function createMailPort(config) {
         }
 
         message.status = "queued";
+        message.queued_at = new Date().toISOString();
         message.attempt = 0;
         message.next_retry_at = null;
         message.claim_token = null;
@@ -331,17 +334,20 @@ export function createMailPort(config) {
         }
         return mail.get(messageId);
       },
-      async clear() {
+      async clear(filters = null) {
         if (!config.testEndpointsEnabled) {
           throw new MailPortError(
             ERROR_CODES.MAIL_TEST_TRANSPORT_DISABLED,
             "Test API is disabled"
           );
         }
-        messages.clear();
-        idempotency.clear();
+        const matches = (item) => !filters || Object.entries(filters).every(([key, value]) =>
+          key === "testRunId" ? item.metadata?.testRunId === value : item[key] === value);
+        for (const [id, item] of messages) if (matches(item)) messages.delete(id);
+        if (!filters) idempotency.clear();
         if (durableOutboxEnabled) {
-          await outbox.clear();
+          if (filters && typeof outbox.deleteWhere === "function") outbox.deleteWhere(matches);
+          else await outbox.clear();
         }
       },
       async waitFor({ timeoutMs = 5000, intervalMs = 25, ...filters } = {}) {

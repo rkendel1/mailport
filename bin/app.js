@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 import { createMailPort } from "../src/mailport.js";
 import { createLocalInboxServer } from "../src/local-inbox-server.js";
-import { createMailPortService } from "../src/remote-service.js";
 import { createRemoteMailPortClient } from "../src/remote-client.js";
+import { createMailService } from "../src/service.js";
 
 function readFlag(args, name) {
   const i = args.indexOf(name);
@@ -42,14 +42,25 @@ async function main() {
     identities: { system: "notifications@example.test" },
     testEndpointsEnabled: true,
   });
+  const remote = process.env.MAILPORT_URL ? createRemoteMailPortClient({ baseUrl: process.env.MAILPORT_URL,
+    apiKey: process.env.MAILPORT_ADMIN_KEY || process.env.MAILPORT_API_KEY }) : null;
 
   if (args[1] === "status") {
     if (process.env.MAILPORT_URL) {
-      console.log(JSON.stringify(await createRemoteMailPortClient({ baseUrl: process.env.MAILPORT_URL,
-        apiKey: process.env.MAILPORT_API_KEY }).status(), null, 2));
+      console.log(JSON.stringify(await remote.status(), null, 2));
     } else printStatus(mail);
     return;
   }
+
+  if (args[1] === "domains") { if (!remote) throw new Error("MAILPORT_URL is required"); console.log(JSON.stringify(await remote.operations.domains.list(), null, 2)); return; }
+  if (args[1] === "identities") { if (!remote) throw new Error("MAILPORT_URL is required"); console.log(JSON.stringify(await remote.operations.identities.list(), null, 2)); return; }
+  if (args[1] === "suppressions") { if (!remote) throw new Error("MAILPORT_URL is required"); console.log(JSON.stringify(await remote.operations.suppressions.list(), null, 2)); return; }
+  if (args[1] === "logs") { if (!remote) throw new Error("MAILPORT_URL is required"); const id = readFlag(args, "--message");
+    if (!id) throw new Error("Usage: app mail logs --message <message-id>"); console.log(JSON.stringify(await remote.operations.events(id), null, 2)); return; }
+  if (args[1] === "domain" && args[2] === "add") { if (!remote) throw new Error("MAILPORT_URL is required");
+    console.log(JSON.stringify(await remote.operations.domains.add(args[3]), null, 2)); return; }
+  if (args[1] === "domain" && args[2] === "verify") { if (!remote) throw new Error("MAILPORT_URL is required");
+    console.log(JSON.stringify(await remote.operations.domains.verify(args[3]), null, 2)); return; }
 
   if (args[1] === "dev") {
     const server = createLocalInboxServer(mail);
@@ -65,17 +76,15 @@ async function main() {
     const apiKey = readFlag(args, "--api-key") || process.env.MAILPORT_API_KEY;
     const outboxFile = readFlag(args, "--outbox") || readFlag(args, "--outbox-file") || process.env.MAILPORT_OUTBOX;
     const serviceTransport = readFlag(args, "--transport") || transport;
-    const serviceMail = createMailPort({
+    const service = createMailService({
+      host, port, apiKey, adminKey: process.env.MAILPORT_ADMIN_KEY,
       applicationId: process.env.MAILPORT_APPLICATION_ID || "app",
       transport: serviceTransport,
       identities: { system: "notifications@example.test" },
       testEndpointsEnabled: true,
-      outbox: {
-        enabled: true,
-        filePath: outboxFile,
-      },
+      outbox: { filePath: outboxFile || ".mailport/outbox.json" },
+      operations: { filePath: process.env.MAILPORT_OPERATIONS || ".mailport/operations.json" },
     });
-    const service = createMailPortService(serviceMail, { host, port, apiKey });
     await service.start();
     console.log(`MailPort service listening on http://${host}:${port}`);
     return;
