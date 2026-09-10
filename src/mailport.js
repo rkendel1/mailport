@@ -156,6 +156,16 @@ export function createMailPort(config) {
       } catch (error) {
         message.status = "failed";
         message.last_error = error.message;
+        message.updated_at = new Date().toISOString();
+        if (payload.idempotencyKey) {
+          idempotency.set(payload.idempotencyKey, message);
+        }
+        if (error instanceof MailPortError) {
+          throw error;
+        }
+        throw new MailPortError(ERROR_CODES.MAIL_DELIVERY_FAILED, error.message, {
+          message_id: message.message_id,
+        });
       }
       message.updated_at = new Date().toISOString();
       message.links = extractLinks({ html: message.html, text: message.text });

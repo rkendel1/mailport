@@ -67,3 +67,23 @@ test("supports explicit send, list/get/clear, and waitFor", async () => {
   mail.test.clear();
   assert.equal(mail.test.list().length, 0);
 });
+
+test("surfaces transport delivery errors", async () => {
+  const mail = createMailPort({
+    applicationId: "appboundry",
+    transport: "smtp",
+    testEndpointsEnabled: true,
+    identities: { system: "notifications@myapp.com" },
+  });
+
+  await assert.rejects(
+    () =>
+      mail.send({
+        identity: "system",
+        to: "user@example.com",
+        subject: "Hello",
+        text: "Hi",
+      }),
+    (error) => error.code === "MAIL_DELIVERY_FAILED"
+  );
+});

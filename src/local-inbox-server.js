@@ -13,16 +13,25 @@ function sendHtml(res, status, body) {
   res.end(body);
 }
 
+function escapeHtml(value) {
+  return String(value)
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;");
+}
+
 function renderInbox(messages) {
   const rows = messages
     .map(
       (m) => `<tr>
-<td>${m.to.join(", ")}</td>
-<td>${m.from}</td>
-<td>${m.subject}</td>
-<td>${m.created_at}</td>
-<td>${m.status}</td>
-<td>${m.message_id}</td>
+<td>${escapeHtml(m.to.join(", "))}</td>
+<td>${escapeHtml(m.from)}</td>
+<td>${escapeHtml(m.subject)}</td>
+<td>${escapeHtml(m.created_at)}</td>
+<td>${escapeHtml(m.status)}</td>
+<td>${escapeHtml(m.message_id)}</td>
 </tr>`
     )
     .join("");
