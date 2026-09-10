@@ -90,8 +90,9 @@ export class FileOperationsStore {
     if (!item) return null;
     const matches = async (record) => { try { const answers = record.type === "CNAME"
       ? await this.resolver.resolveCname(record.fqdn) : (await this.resolver.resolveTxt(record.fqdn)).map((parts) => parts.join(""));
-      if (record.purpose === "spf") return answers.some((answer) => /^v=spf1(?:\s|$)/i.test(answer) &&
-        (record.required_mechanisms || spfMechanisms(record.value)).every((mechanism) => answer.split(/\s+/).includes(mechanism)));
+      if (record.purpose === "spf") { const policies = answers.filter((answer) => /^v=spf1(?:\s|$)/i.test(answer));
+        return policies.length === 1 && (record.required_mechanisms || spfMechanisms(record.value))
+          .every((mechanism) => policies[0].split(/\s+/).includes(mechanism)); }
       return answers.some((answer) => String(answer).replace(/\.$/, "") === String(record.value).replace(/\.$/, "")); } catch { return false; } };
     const results = await Promise.all(item.dns.map(matches));
     const has = (purpose) => item.dns.map((record, index) => record.purpose !== purpose || results[index]).every(Boolean);

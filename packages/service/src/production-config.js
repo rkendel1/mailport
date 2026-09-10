@@ -16,8 +16,12 @@ export function validateProductionConfig(options = {}, environment = process.env
       if (!environment[name] && !options.transport?.[name.slice(14).toLowerCase()]) missing.push(name);
   }
   if (transport === "direct-mx") {
-    if (!environment.MAILPORT_MTA_HOSTNAME && !options.transport?.hostname) missing.push("MAILPORT_MTA_HOSTNAME");
-    if (!environment.MAILPORT_EGRESS_IP && !options.transport?.egressIp) missing.push("MAILPORT_EGRESS_IP");
+    const remoteWorker = environment.MAILPORT_DIRECT_MX_WORKER_URL || options.transport?.workerUrl;
+    if (remoteWorker && production && !String(remoteWorker).startsWith("https://"))
+      throw new MailPortError(ERROR_CODES.MAIL_NOT_CONFIGURED, "MAILPORT_DIRECT_MX_WORKER_URL must use HTTPS in production");
+    if (remoteWorker && !environment.MAILPORT_DELIVERY_TOKEN && !options.transport?.deliveryToken) missing.push("MAILPORT_DELIVERY_TOKEN");
+    if (!remoteWorker && !environment.MAILPORT_MTA_HOSTNAME && !options.transport?.hostname) missing.push("MAILPORT_MTA_HOSTNAME");
+    if (!remoteWorker && !environment.MAILPORT_EGRESS_IP && !options.transport?.egressIp) missing.push("MAILPORT_EGRESS_IP");
     if (!environment.MAILPORT_KEY_ENCRYPTION_KEY) missing.push("MAILPORT_KEY_ENCRYPTION_KEY");
   }
   if (transport === "cloudflare") {

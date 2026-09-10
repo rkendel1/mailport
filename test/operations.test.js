@@ -42,6 +42,19 @@ test("SPF verification accepts an existing policy merged with MailPort authoriza
   assert.equal((await store.verifyDomain("example.test")).status, "active");
 });
 
+test("SPF verification rejects multiple SPF policies", async () => {
+  const resolver = { resolveTxt: async (name) => name.startsWith("mp-") ? [["v=DKIM1; k=rsa; p=test"]]
+    : name.startsWith("_dmarc") ? [["v=DMARC1; p=none; rua=mailto:dmarc@example.test"]]
+    : [["mailerport-verification=token"], ["v=spf1 ip4:192.0.2.10 -all"], ["v=spf1 -all"]] };
+  const store = new FileOperationsStore({ resolver, dnsConfig: { spfValue: "v=spf1 ip4:192.0.2.10 -all" } });
+  const domain = store.createDomain("example.test");
+  resolver.resolveTxt = async (name) => name === "example.test"
+    ? [[domain.verification.record], ["v=spf1 ip4:192.0.2.10 -all"], ["v=spf1 -all"]]
+    : name.startsWith("_dmarc") ? [[domain.dmarc.record]] : [[domain.dkim.record]];
+  const verified = await store.verifyDomain("example.test");
+  assert.equal(verified.authentication.spf, "pending");
+});
+
 test("scoped keys isolate applications, suppression precedes acceptance, and limits return 429", async () => {
   const port = await freePort();
   const operations = new FileOperationsStore();

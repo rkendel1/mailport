@@ -12,12 +12,14 @@ function smtpCommand(socket, command, expected) {
     let response = "";
     const onData = (chunk) => {
       response += chunk;
+      if (response.length > 65_536) { cleanup(); return reject(new Error("SMTP response exceeded limit")); }
       const lines = response.split("\r\n").filter(Boolean);
       const last = lines.at(-1) || "";
       if (!/^\d{3} /.test(last)) return;
       cleanup();
       if (expected.includes(Number(last.slice(0, 3)))) resolve(response);
-      else { const error = new Error(`SMTP rejected command (${last.slice(0, 3)})`); error.smtpCode = Number(last.slice(0, 3)); reject(error); }
+      else { const error = new Error(`SMTP rejected command (${last.slice(0, 3)})`); error.smtpCode = Number(last.slice(0, 3));
+        error.enhancedStatusCode = last.match(/\b[245]\.\d\.\d\b/)?.[0]; error.smtpResponse = last.slice(0, 512); reject(error); }
     };
     const onError = (error) => { cleanup(); reject(error); };
     const cleanup = () => { socket.off("data", onData); socket.off("error", onError); };
@@ -66,21 +68,30 @@ export class SmtpTransport {
 
 export function createSmtpTransport(options) { return new SmtpTransport(options); }
 
+async function withTimeout(promise, timeoutMs, message) { let timer;
+  try { return await Promise.race([promise, new Promise((_, reject) => { timer = setTimeout(() => reject(new Error(message)), timeoutMs); })]); }
+  finally { clearTimeout(timer); } }
+
 async function connectMx({ host, port, helo, envelopeFrom, recipients, mime, requireTLS, timeoutMs }) {
   let socket = net.connect({ host, port }); socket.setTimeout(timeoutMs, () => socket.destroy(new Error("SMTP connection timed out")));
+  let tlsNegotiated = false;
   try {
     await smtpCommand(socket, null, [220]);
     let capabilities = await smtpCommand(socket, `EHLO ${helo}`, [250]);
     if (/STARTTLS/i.test(capabilities)) {
       await smtpCommand(socket, "STARTTLS", [220]);
       socket = await new Promise((resolve, reject) => { const secured = tls.connect({ socket, servername: host }, () => resolve(secured)); secured.once("error", reject); });
+      tlsNegotiated = true;
       await smtpCommand(socket, `EHLO ${helo}`, [250]);
     } else if (requireTLS) throw new Error("Recipient MX does not advertise STARTTLS");
     await smtpCommand(socket, `MAIL FROM:<${envelopeFrom}>`, [250]);
     for (const recipient of recipients) await smtpCommand(socket, `RCPT TO:<${recipient}>`, [250, 251]);
     await smtpCommand(socket, "DATA", [354]);
-    await smtpCommand(socket, `${mime.replace(/^\./gm, "..")}\r\n.`, [250]);
+    const accepted = await smtpCommand(socket, `${mime.replace(/^\./gm, "..")}\r\n.`, [250]);
     await smtpCommand(socket, "QUIT", [221]);
+    const line = accepted.trim().split("\r\n").at(-1) || "250";
+    return { tlsNegotiated, responseCode: Number(line.slice(0, 3)), enhancedStatusCode: line.match(/\b[245]\.\d\.\d\b/)?.[0],
+      response: line.slice(0, 512) };
   } finally { socket.destroy(); }
 }
 
@@ -97,24 +108,34 @@ export class DirectMxTransport {
       if (!domain) return { status: "failed", error: "Invalid recipient domain" };
       groups.set(domain, [...(groups.get(domain) || []), recipient]); }
     const dkim = await this.signingResolver?.(message);
-    const mime = createMimeMessage({ ...message, dkim }); let deliveredGroups = 0; const errors = [];
+    const mime = createMimeMessage({ ...message, dkim }); let deliveredGroups = 0; const errors = []; const evidence = [];
     for (const [domain, domainRecipients] of groups) {
       let exchanges;
-      try { exchanges = (await this.resolver.resolveMx(domain)).sort((a, b) => a.priority - b.priority); }
+      try { exchanges = (await withTimeout(this.resolver.resolveMx(domain), this.timeoutMs, "MX lookup timed out")).sort((a, b) => a.priority - b.priority); }
       catch (error) { errors.push(error); continue; }
       let accepted = false;
       for (const exchange of exchanges) {
-        try { await connectMx({ host: exchange.exchange, port: this.port, helo: this.hostname,
+        const startedAt = new Date().toISOString(); let mxAddress = null;
+        try { mxAddress = (await dns.lookup(exchange.exchange)).address; } catch {}
+        try { const smtp = await connectMx({ host: exchange.exchange, port: this.port, helo: this.hostname,
           envelopeFrom: this.envelopeFrom || message.from, recipients: domainRecipients, mime,
-          requireTLS: this.requireTLS, timeoutMs: this.timeoutMs }); accepted = true; break; }
-        catch (error) { errors.push(error); if (error.smtpCode >= 500) break; }
+          requireTLS: this.requireTLS, timeoutMs: this.timeoutMs });
+          evidence.push({ messageId: message.message_id, recipients: domainRecipients, mxHost: exchange.exchange, mxAddress, attempt: message.attempt || 1,
+            connection: "connected", tlsNegotiated: smtp.tlsNegotiated, smtpCode: smtp.responseCode,
+            enhancedStatusCode: smtp.enhancedStatusCode || null, response: smtp.response, outcome: "accepted", timestamp: startedAt }); accepted = true; break; }
+        catch (error) { errors.push(error); evidence.push({ messageId: message.message_id, recipients: domainRecipients, mxHost: exchange.exchange,
+          mxAddress, attempt: message.attempt || 1, connection: "failed", tlsNegotiated: false, smtpCode: error.smtpCode || null,
+          enhancedStatusCode: error.enhancedStatusCode || null, response: error.smtpResponse || error.message.slice(0, 512),
+          outcome: error.smtpCode >= 500 ? "permanent_failure" : "temporary_failure", timestamp: startedAt }); if (error.smtpCode >= 500) break; }
       }
       if (accepted) deliveredGroups += 1;
     }
-    if (deliveredGroups === groups.size) return { status: "sent", transport: "direct-mx", message_id: `<${message.message_id}@${this.hostname}>` };
+    if (deliveredGroups === groups.size) return { status: "accepted", transport: "direct-mx", message_id: `<${message.message_id}@${this.hostname}>`,
+      metadata: { evidence } };
     const permanent = errors.some((error) => error.smtpCode >= 500);
     return { status: deliveredGroups ? "failed" : permanent ? "failed" : "retry",
-      error: errors.at(-1)?.message || "No recipient MX accepted the message", metadata: { delivered_groups: deliveredGroups, total_groups: groups.size } };
+      error: errors.at(-1)?.message || "No recipient MX accepted the message",
+      metadata: { delivered_groups: deliveredGroups, total_groups: groups.size, evidence } };
   }
 }
 

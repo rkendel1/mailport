@@ -31,7 +31,8 @@ test("direct MX transport resolves recipient MX and waits for DATA acceptance", 
   const result = await transport.send({ message_id: "msg_direct", from: "auth@sender.test", to: ["user@recipient.test"],
     cc: [], bcc: [], reply_to: [], subject: "Direct", text: "hello", html: "<p>hello</p>", attachments: [] });
   smtp.server.close();
-  assert.equal(result.status, "sent"); assert.match(smtp.received(), /EHLO mail\.sender\.test/); assert.match(smtp.received(), /Subject: Direct/);
+  assert.equal(result.status, "accepted"); assert.equal(result.metadata.evidence[0].smtpCode, 250);
+  assert.match(smtp.received(), /EHLO mail\.sender\.test/); assert.match(smtp.received(), /Subject: Direct/);
 });
 
 test("encrypted signing keys survive restart without plaintext persistence", () => {

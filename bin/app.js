@@ -44,6 +44,23 @@ function printDns(domain, records) {
   console.log(`Run:\n  app mail domain verify ${domain.domain}`);
 }
 
+function directMxConfig() {
+  return { workerUrl: String(process.env.MAILPORT_DIRECT_MX_WORKER_URL || "").replace(/\/$/, ""),
+    token: process.env.MAILPORT_DELIVERY_TOKEN, hostname: process.env.MAILPORT_MTA_HOSTNAME || "mail.agenttrustvault.com",
+    egressIp: process.env.MAILPORT_EGRESS_IP || "unknown" };
+}
+
+async function directMxRequest(path, { authenticated = false } = {}) {
+  const config = directMxConfig();
+  if (!config.workerUrl) throw new Error("MAILPORT_DIRECT_MX_WORKER_URL is required");
+  if (authenticated && !config.token) throw new Error("MAILPORT_DELIVERY_TOKEN is required");
+  const response = await fetch(`${config.workerUrl}${path}`, { signal: AbortSignal.timeout(15_000),
+    headers: authenticated ? { authorization: `Bearer ${config.token}` } : {} });
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(body.message || `Direct-MX worker returned HTTP ${response.status}`);
+  return body;
+}
+
 async function main() {
   const args = process.argv.slice(2);
   if (args[0] !== "mail") {
@@ -94,6 +111,35 @@ async function main() {
   if (args[1] === "transport" && args[2] === "status") {
     printTransportStatus(process.env.MAILPORT_URL ? await (await getRemote()).status() : { transport });
     return;
+  }
+
+  if (args[1] === "direct-mx" && args[2] === "status") {
+    const config = directMxConfig();
+    const [health, readiness] = await Promise.all([directMxRequest("/health"), directMxRequest("/ready")]);
+    console.log("Transport: direct-mx"); console.log(`MTA hostname: ${config.hostname}`);
+    console.log(`Egress IP: ${config.egressIp}`); console.log(`Status: ${health.ok && readiness.ready ? "ready" : "not ready"}`);
+    return;
+  }
+
+  if (args[1] === "direct-mx" && args[2] === "verify") {
+    const to = readFlag(args, "--to");
+    if (!to) throw new Error("Usage: app mail direct-mx verify --to <recipient>");
+    const result = await directMxRequest(`/v1/verify?to=${encodeURIComponent(to)}`, { authenticated: true });
+    const proof = result.verification;
+    console.log("✓ worker authenticated"); console.log("✓ direct-MX transport enabled");
+    console.log(`✓ ${proof.hostname} resolves to ${proof.egressIp}`); console.log(`✓ PTR resolves to ${proof.hostname}`);
+    console.log("✓ FCrDNS matches"); console.log(`✓ outbound TCP/${proof.outboundPort} reachable via ${proof.mxHost}`);
+    return;
+  }
+
+  if (args[1] === "direct-mx" && args[2] === "test") {
+    const to = readFlag(args, "--to"), from = readFlag(args, "--from") || process.env.MAILPORT_TEST_IDENTITY;
+    if (!to || !from) throw new Error("Usage: app mail direct-mx test --to <recipient> --from <identity>");
+    const target = await getRemote();
+    if (!target) throw new Error("MAILPORT_URL is required so Fly remains the delivery authority");
+    const message = await target.send({ identity: from, to, subject: "MailPort direct-MX delivery test",
+      text: "This message verifies MailPort direct-MX delivery.", html: "<p>This message verifies MailPort direct-MX delivery.</p>" });
+    console.log(JSON.stringify(message, null, 2)); return;
   }
 
   if (args[1] === "domains") { const remote = await getRemote(); if (!remote) throw new Error("MAILPORT_URL is required"); console.log(JSON.stringify(await remote.operations.domains.list(), null, 2)); return; }

@@ -1,5 +1,6 @@
 export { createMailService } from "./service.js";
 export { createMailPortService } from "./remote-service.js";
+export { createDirectMxWorker } from "./direct-mx-worker.js";
 export { FileOperationsStore } from "./operations.js";
 export { createDeliveryEventSource } from "./delivery-events.js";
 export { validateProductionConfig } from "./production-config.js";

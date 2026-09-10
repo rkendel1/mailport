@@ -7,6 +7,7 @@ export { FileMailStore, createOutbox, createOutboxWorker } from "./outbox.js";
 export { createMimeMessage } from "./mime.js";
 export { createSmtpTransport, SmtpTransport, MemoryTransport, LocalTransport } from "./transports.js";
 export { createDirectMxTransport, DirectMxTransport } from "./transports.js";
+export { createRemoteDirectMxTransport, RemoteDirectMxTransport } from "./direct-mx-remote.js";
 export { CloudflareTransport, CloudflareEmailHttpClient, FakeCloudflareEmailClient, createCloudflareTransport } from "./cloudflare-transport.js";
 export { FileOperationsStore } from "./operations.js";
 export { validateProductionConfig } from "./production-config.js";

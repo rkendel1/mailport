@@ -7,6 +7,7 @@ import { FileSigningKeyStore } from "./signing-key-store.js";
 import { validateMtaEgress, validateMtaIdentity } from "./mta-readiness.js";
 import { createDirectMxTransport, createSmtpTransport } from "./transports.js";
 import { createCloudflareTransport } from "./cloudflare-transport.js";
+import { createRemoteDirectMxTransport } from "./direct-mx-remote.js";
 
 export function createMailService(options = {}) {
   const environment = options.environment || process.env;
@@ -16,7 +17,12 @@ export function createMailService(options = {}) {
   const transport = options.transport || { type: environment.MAILPORT_TRANSPORT || "local" };
   let transportConfig = typeof transport === "string" ? transport : { ...transport, kind: transport.kind || transport.type };
   const transportType = typeof transportConfig === "string" ? transportConfig : transportConfig.type || transportConfig.kind;
-  if (transportType === "direct-mx") transportConfig = createDirectMxTransport({
+  const directWorkerUrl = transportConfig.workerUrl || environment.MAILPORT_DIRECT_MX_WORKER_URL;
+  if (transportType === "direct-mx" && directWorkerUrl) transportConfig = createRemoteDirectMxTransport({
+    workerUrl: directWorkerUrl, deliveryToken: transportConfig.deliveryToken || environment.MAILPORT_DELIVERY_TOKEN,
+    timeoutMs: Number(transportConfig.timeoutMs || environment.MAILPORT_DIRECT_MX_WORKER_TIMEOUT_MS || 45_000),
+    signingResolver: (message) => operations?.signingForMessage(message) });
+  else if (transportType === "direct-mx") transportConfig = createDirectMxTransport({
     ...(typeof transportConfig === "object" ? transportConfig : {}), hostname: transportConfig.hostname || environment.MAILPORT_MTA_HOSTNAME,
     envelopeFrom: transportConfig.envelopeFrom || environment.MAILPORT_ENVELOPE_FROM,
     requireTLS: transportConfig.requireTLS ?? environment.MAILPORT_MTA_REQUIRE_TLS === "true",
@@ -67,7 +73,7 @@ export function createMailService(options = {}) {
     maxBodyBytes: options.maxBodyBytes, testEndpointsEnabled: options.testEndpointsEnabled ?? testTransport });
   const startServer = server.start;
   return { ...server, async start() {
-    if (production.production && transportType === "direct-mx") {
+    if (production.production && transportType === "direct-mx" && !directWorkerUrl) {
       const egressIp = transport.egressIp || environment.MAILPORT_EGRESS_IP;
       await validateMtaIdentity({ hostname: transport.hostname || environment.MAILPORT_MTA_HOSTNAME,
         egressIp, resolver: options.mta?.resolver });

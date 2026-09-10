@@ -13,6 +13,15 @@ test("production configuration fails closed", () => {
     outbox: { filePath: "/data/outbox.json" }, transport: "local" }, {}));
 });
 
+test("remote direct-MX production configuration keeps Fly as retry authority", () => {
+  const environment = { NODE_ENV: "production", MAILPORT_API_KEY: "production-key", MAILPORT_OUTBOX: "/data/outbox.json",
+    MAILPORT_TRANSPORT: "direct-mx", MAILPORT_DIRECT_MX_WORKER_URL: "https://mail.example.com", MAILPORT_DELIVERY_TOKEN: "secret",
+    MAILPORT_KEY_ENCRYPTION_KEY: Buffer.alloc(32).toString("base64") };
+  assert.equal(validateProductionConfig({}, environment).transport, "direct-mx");
+  assert.throws(() => validateProductionConfig({}, { ...environment, MAILPORT_DELIVERY_TOKEN: undefined }), /MAILPORT_DELIVERY_TOKEN/);
+  assert.throws(() => validateProductionConfig({}, { ...environment, MAILPORT_DIRECT_MX_WORKER_URL: "http://mail.example.com" }), /must use HTTPS/);
+});
+
 test("hard bounce is authoritative and suppresses future mail", async () => {
   const outbox = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "mailport-delivery-")), "outbox.json");
   const mail = createMailPort({ applicationId: "a", identities: { system: "system@example.test" }, transport: "local",

@@ -4,6 +4,7 @@ export interface MailServiceOptions { host?:string;port?:number;apiKey?:string;a
 export interface MailService { mail:MailPort;operations:unknown;start():Promise<void>;stop():Promise<void> }
 export function createMailService(options?:MailServiceOptions):MailService;
 export function createMailPortService(mail:MailPort,options?:Record<string,unknown>):Pick<MailService,"start"|"stop">;
+export function createDirectMxWorker(options?:Record<string,unknown>):{start():Promise<void>;stop():Promise<void>;readonly ready:boolean};
 export class FileOperationsStore { constructor(options?:Record<string,unknown>); }
 export function createDeliveryEventSource(options:Record<string,unknown>):{consume(event:Record<string,unknown>):Promise<unknown>};
 export function validateProductionConfig(options?:Record<string,unknown>,environment?:Record<string,string|undefined>):{production:boolean};
