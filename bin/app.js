@@ -1,6 +1,4 @@
 #!/usr/bin/env node
-import { createMailPort, createRemoteMailPortClient } from "@mailerport/sdk";
-import { createLocalInboxServer } from "../src/local-inbox-server.js";
 import { createMailService } from "@mailerport/service";
 
 function readFlag(args, name) {
@@ -47,9 +45,16 @@ async function main() {
     process.env.FELTDB_MAIL_TRANSPORT ||
     process.env.MAILPORT_TRANSPORT ||
     "memory";
+  let sdk;
+  const getSdk = async () => {
+    if (sdk) return sdk;
+    sdk = await import("@mailerport/sdk");
+    return sdk;
+  };
   let mail;
-  const getMail = () => {
+  const getMail = async () => {
     if (mail) return mail;
+    const { createMailPort } = await getSdk();
     mail = createMailPort({
       applicationId: process.env.MAILPORT_APPLICATION_ID || "app",
       transport,
@@ -58,32 +63,41 @@ async function main() {
     });
     return mail;
   };
-  const remote = process.env.MAILPORT_URL ? createRemoteMailPortClient({ baseUrl: process.env.MAILPORT_URL,
-    apiKey: process.env.MAILPORT_ADMIN_KEY || process.env.MAILPORT_API_KEY }) : null;
+  let remote;
+  const getRemote = async () => {
+    if (!process.env.MAILPORT_URL) return null;
+    if (remote) return remote;
+    const { createRemoteMailPortClient } = await getSdk();
+    remote = createRemoteMailPortClient({ baseUrl: process.env.MAILPORT_URL,
+      apiKey: process.env.MAILPORT_ADMIN_KEY || process.env.MAILPORT_API_KEY });
+    return remote;
+  };
 
   if (args[1] === "status") {
     if (process.env.MAILPORT_URL) {
+      const remote = await getRemote();
       console.log(JSON.stringify(await remote.status(), null, 2));
-    } else printStatus(getMail());
+    } else printStatus(await getMail());
     return;
   }
 
-  if (args[1] === "domains") { if (!remote) throw new Error("MAILPORT_URL is required"); console.log(JSON.stringify(await remote.operations.domains.list(), null, 2)); return; }
-  if (args[1] === "identities") { if (!remote) throw new Error("MAILPORT_URL is required"); console.log(JSON.stringify(await remote.operations.identities.list(), null, 2)); return; }
-  if (args[1] === "suppressions") { if (!remote) throw new Error("MAILPORT_URL is required"); console.log(JSON.stringify(await remote.operations.suppressions.list(), null, 2)); return; }
-  if (args[1] === "logs") { if (!remote) throw new Error("MAILPORT_URL is required"); const id = readFlag(args, "--message");
+  if (args[1] === "domains") { const remote = await getRemote(); if (!remote) throw new Error("MAILPORT_URL is required"); console.log(JSON.stringify(await remote.operations.domains.list(), null, 2)); return; }
+  if (args[1] === "identities") { const remote = await getRemote(); if (!remote) throw new Error("MAILPORT_URL is required"); console.log(JSON.stringify(await remote.operations.identities.list(), null, 2)); return; }
+  if (args[1] === "suppressions") { const remote = await getRemote(); if (!remote) throw new Error("MAILPORT_URL is required"); console.log(JSON.stringify(await remote.operations.suppressions.list(), null, 2)); return; }
+  if (args[1] === "logs") { const remote = await getRemote(); if (!remote) throw new Error("MAILPORT_URL is required"); const id = readFlag(args, "--message");
     if (!id) throw new Error("Usage: app mail logs --message <message-id>"); console.log(JSON.stringify(await remote.operations.events(id), null, 2)); return; }
-  if (args[1] === "domain" && args[2] === "add") { if (!remote) throw new Error("MAILPORT_URL is required");
+  if (args[1] === "domain" && args[2] === "add") { const remote = await getRemote(); if (!remote) throw new Error("MAILPORT_URL is required");
     const domain = await remote.operations.domains.add(args[3]); printDns(domain, domain.dns); return; }
-  if (args[1] === "domain" && args[2] === "status") { if (!remote) throw new Error("MAILPORT_URL is required");
+  if (args[1] === "domain" && args[2] === "status") { const remote = await getRemote(); if (!remote) throw new Error("MAILPORT_URL is required");
     printDomain(await remote.operations.domains.get(args[3])); return; }
-  if (args[1] === "domain" && args[2] === "dns") { if (!remote) throw new Error("MAILPORT_URL is required");
+  if (args[1] === "domain" && args[2] === "dns") { const remote = await getRemote(); if (!remote) throw new Error("MAILPORT_URL is required");
     const domain = await remote.operations.domains.get(args[3]); printDns(domain, await remote.operations.domains.dns(args[3])); return; }
-  if (args[1] === "domain" && args[2] === "verify") { if (!remote) throw new Error("MAILPORT_URL is required");
+  if (args[1] === "domain" && args[2] === "verify") { const remote = await getRemote(); if (!remote) throw new Error("MAILPORT_URL is required");
     printDomain(await remote.operations.domains.verify(args[3])); return; }
 
   if (args[1] === "dev") {
-    const server = createLocalInboxServer(getMail());
+    const { createLocalInboxServer } = await import("../src/local-inbox-server.js");
+    const server = createLocalInboxServer(await getMail());
     await server.start();
     console.log("MailPort local inbox:");
     console.log("http://127.0.0.1:8788/mail");
@@ -129,7 +143,7 @@ async function main() {
         "Usage: app mail send --to <email> --from <identity> --subject <subject> --text <text> [--html <html>]"
       );
     }
-    const message = await getMail().send({
+    const message = await (await getMail()).send({
       identity: from,
       to,
       subject,
@@ -141,7 +155,7 @@ async function main() {
   }
 
   if (args[1] === "test" && args[2] === "clear") {
-    getMail().test.clear();
+    (await getMail()).test.clear();
     console.log("Cleared test messages.");
     return;
   }
@@ -154,7 +168,7 @@ async function main() {
   if (args[1] === "test" && args[2] === "wait") {
     const to = readFlag(args, "--to");
     const template = readFlag(args, "--template");
-    const msg = await getMail().test.waitFor({ to, template, timeoutMs: 5000 });
+    const msg = await (await getMail()).test.waitFor({ to, template, timeoutMs: 5000 });
     console.log(JSON.stringify(msg, null, 2));
     return;
   }
