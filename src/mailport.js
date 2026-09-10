@@ -157,9 +157,6 @@ export function createMailPort(config) {
         message.status = "failed";
         message.last_error = error.message;
         message.updated_at = new Date().toISOString();
-        if (payload.idempotencyKey) {
-          idempotency.set(payload.idempotencyKey, message);
-        }
         if (error instanceof MailPortError) {
           throw error;
         }

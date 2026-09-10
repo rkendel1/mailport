@@ -11,11 +11,6 @@ Minimal MailPort foundation implementing:
   - `GET /v1/test/messages`
   - `GET /v1/test/messages/:id`
   - `DELETE /v1/test/messages`
-- CLI:
-  - `app mail status`
-  - `app mail dev`
-  - `app mail send --to ... --from ... --subject ... --text ...`
-  - `app mail test inbox|clear|wait`
 
 ## Run tests
 
