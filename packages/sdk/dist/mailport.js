@@ -204,7 +204,6 @@ export function createMailPort(config) {
           ? JSON.stringify({ ...payload, idempotencyKey: undefined })
           : null,
         attachments,
-        dkim: payload.__dkim || null,
         status: "accepted",
         accepted_at: now,
         created_at: now,

@@ -29,6 +29,19 @@ test("domains activate identities after DNS verification", async () => {
   assert.equal(Object.hasOwn(verified.dkim, "private_key"), false);
 });
 
+test("SPF verification accepts an existing policy merged with MailPort authorization", async () => {
+  const store = new FileOperationsStore({ dnsConfig: { spfValue: "v=spf1 ip4:192.0.2.10 -all" } });
+  const domain = store.createDomain("example.test");
+  assert.equal(domain.spf.merge_existing, true);
+  assert.deepEqual(domain.spf.required_mechanisms, ["ip4:192.0.2.10"]);
+  assert.equal(domain.dns.find((record) => record.purpose === "spf").action, "merge");
+  store.resolver = { async resolveTxt(name) {
+    if (name === "example.test") return [[domain.verification.record], ["v=spf1 include:_spf.example.net ip4:192.0.2.10 -all"]];
+    return domain.dns.filter((record) => record.fqdn === name && record.type === "TXT").map((record) => [record.value]);
+  }, async resolveCname() { return []; } };
+  assert.equal((await store.verifyDomain("example.test")).status, "active");
+});
+
 test("scoped keys isolate applications, suppression precedes acceptance, and limits return 429", async () => {
   const port = await freePort();
   const operations = new FileOperationsStore();

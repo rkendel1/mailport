@@ -7,15 +7,18 @@ import { MailPortError, ERROR_CODES } from "@mailerport/core";
 const clone = (value) => structuredClone(value);
 const now = () => new Date().toISOString();
 const normalizeEmail = (email) => String(email).trim().toLowerCase();
+const spfMechanisms = (record) => String(record).trim().split(/\s+/).filter((value) =>
+  value !== "v=spf1" && !/^[?+~-]?all$/i.test(value) && !value.includes("="));
 
 export class FileOperationsStore {
-  constructor({ filePath, resolver = dns, dnsConfig = {} } = {}) {
+  constructor({ filePath, resolver = dns, dnsConfig = {}, signingKeyStore } = {}) {
     this.filePath = filePath;
     this.resolver = resolver;
     this.dnsConfig = dnsConfig;
     this.state = { domains: [], identities: [], suppressions: [], keys: [] };
     this.rate = new Map();
     this.signingKeys = new Map();
+    this.signingKeyStore = signingKeyStore;
     this.#load();
   }
   #load() {
@@ -40,7 +43,7 @@ export class FileOperationsStore {
     if (existing) return clone(existing);
     const selector = this.dnsConfig.dkimSelector || `mp-${crypto.randomBytes(6).toString("hex")}`;
     const verificationToken = crypto.randomBytes(24).toString("hex");
-    let privateKey = this.signingKeys.get(domain);
+    let privateKey = this.signingKeyStore?.get(domain) || this.signingKeys.get(domain);
     let publicKey;
     if (privateKey) {
       publicKey = crypto.createPublicKey(privateKey).export({ type: "spki", format: "pem" });
@@ -54,7 +57,8 @@ export class FileOperationsStore {
     const item = { id: `dom_${randomUUID().replaceAll("-", "")}`, domain, status: "pending", created_at: timestamp, updated_at: timestamp,
       verification: { method: "dns", token: verificationToken, status: "pending", name: domain,
         record: `mailerport-verification=${verificationToken}` },
-      spf: { status: "pending", name: domain, record: this.dnsConfig.spfValue || "v=spf1 -all" },
+      spf: { status: "pending", name: domain, record: this.dnsConfig.spfValue || "v=spf1 -all",
+        required_mechanisms: spfMechanisms(this.dnsConfig.spfValue || "v=spf1 -all"), merge_existing: true },
       dkim: { status: "pending", selector, name: `${selector}._domainkey.${domain}`,
         record: `v=DKIM1; k=rsa; p=${publicValue}` },
       dmarc: { status: "pending", name: `_dmarc.${domain}`, record: this.dnsConfig.dmarcValue || "v=DMARC1; p=none; rua=mailto:dmarc@" + domain } };
@@ -64,10 +68,12 @@ export class FileOperationsStore {
       ...(cnameTargets.length ? cnameTargets.map((target, index) => ({ type: "CNAME", name: `mp${index + 1}._domainkey`,
         fqdn: `mp${index + 1}._domainkey.${domain}`, purpose: "dkim", value: target })) :
         [{ type: "TXT", name: `${selector}._domainkey`, fqdn: item.dkim.name, purpose: "dkim", value: item.dkim.record }]),
-      { type: "TXT", name: "@", fqdn: domain, purpose: "spf", value: item.spf.record },
+      { type: "TXT", name: "@", fqdn: domain, purpose: "spf", value: item.spf.record, action: "merge",
+        required_mechanisms: item.spf.required_mechanisms },
       { type: "TXT", name: "_dmarc", fqdn: item.dmarc.name, purpose: "dmarc", value: item.dmarc.record },
     ];
     this.signingKeys.set(domain, privateKey);
+    this.signingKeyStore?.set(domain, privateKey);
     this.state.domains.push(item); this.#save(); return this.#publicDomain(item);
   }
   #publicDomain(item) { const value = clone(item); if (value?.dkim) delete value.dkim.private_key;
@@ -78,12 +84,14 @@ export class FileOperationsStore {
   listDomains() { return this.state.domains.map((item) => this.#publicDomain(item)); }
   getDomain(domain) { const item = this.state.domains.find((value) => value.domain === domain); return item ? this.#publicDomain(item) : null; }
   getDomainDns(domain) { return this.getDomain(domain)?.dns || null; }
-  deleteDomain(domain) { this.state.domains = this.state.domains.filter((item) => item.domain !== domain); this.#save(); }
+  deleteDomain(domain) { this.state.domains = this.state.domains.filter((item) => item.domain !== domain); this.signingKeyStore?.delete(domain); this.signingKeys.delete(domain); this.#save(); }
   async verifyDomain(domainName) {
     const item = this.state.domains.find((value) => value.domain === domainName);
     if (!item) return null;
     const matches = async (record) => { try { const answers = record.type === "CNAME"
       ? await this.resolver.resolveCname(record.fqdn) : (await this.resolver.resolveTxt(record.fqdn)).map((parts) => parts.join(""));
+      if (record.purpose === "spf") return answers.some((answer) => /^v=spf1(?:\s|$)/i.test(answer) &&
+        (record.required_mechanisms || spfMechanisms(record.value)).every((mechanism) => answer.split(/\s+/).includes(mechanism)));
       return answers.some((answer) => String(answer).replace(/\.$/, "") === String(record.value).replace(/\.$/, "")); } catch { return false; } };
     const results = await Promise.all(item.dns.map(matches));
     const has = (purpose) => item.dns.map((record, index) => record.purpose !== purpose || results[index]).every(Boolean);
@@ -108,11 +116,14 @@ export class FileOperationsStore {
     const identity = this.state.identities.find((item) => item.identity === identityName && item.status === "active" &&
       (!item.application_id || item.application_id === principal.application_id));
     const domain = identity && this.state.domains.find((item) => item.domain === identity.domain && item.status === "active");
-    const privateKey = domain && this.signingKeys.get(domain.domain);
+    const privateKey = domain && (this.signingKeyStore?.get(domain.domain) || this.signingKeys.get(domain.domain));
     return domain && privateKey ? { domain: domain.domain, selector: domain.dkim.selector, privateKey } : null;
   }
-  setSigningKey(domain, privateKey) { this.signingKeys.set(domain, privateKey); }
-  signingReady() { return this.state.domains.filter((item) => item.status === "active").every((item) => this.signingKeys.has(item.domain)); }
+  signingForMessage(message) { return this.signingForIdentity(message.identity,
+    { application_id: message.application_id, tenant_id: message.tenant_id }); }
+  setSigningKey(domain, privateKey) { this.signingKeys.set(domain, privateKey); this.signingKeyStore?.set(domain, privateKey); }
+  signingReady() { return this.state.domains.filter((item) => item.status === "active").every((item) =>
+    this.signingKeyStore?.has(item.domain) || this.signingKeys.has(item.domain)); }
   addSuppression({ email, reason = "manual", source = "admin", application_id = null, tenant_id = null }) {
     const item = { email: normalizeEmail(email), reason, source, application_id, tenant_id, created_at: now() };
     this.state.suppressions = this.state.suppressions.filter((value) => !(value.email === item.email && value.application_id === application_id));

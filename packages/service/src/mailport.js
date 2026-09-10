@@ -73,7 +73,7 @@ function createTransport(name, explicitTransport, environment = process.env) {
   }
   if (name === "memory") return new MemoryTransport();
   if (name === "local") return new LocalTransport();
-  if (name === "smtp") throw new MailPortError(ERROR_CODES.MAIL_NOT_CONFIGURED, "SMTP belongs in @mailerport/smtp and service configuration");
+  if (name === "smtp") throw new MailPortError(ERROR_CODES.MAIL_NOT_CONFIGURED, "Service must inject @mailerport/smtp as a transport");
   throw new MailPortError(ERROR_CODES.MAIL_NOT_CONFIGURED, `Unknown transport: ${name}`);
 }
 
@@ -204,7 +204,6 @@ export function createMailPort(config) {
           ? JSON.stringify({ ...payload, idempotencyKey: undefined })
           : null,
         attachments,
-        dkim: payload.__dkim || null,
         status: "accepted",
         accepted_at: now,
         created_at: now,

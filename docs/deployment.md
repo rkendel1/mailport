@@ -39,3 +39,5 @@ Use `app mail status`, `domains`, `identities`, `logs --message <id>`, and `supp
 ## External acceptance
 
 The final SMTP/DNS/mailbox proof is necessarily environment-specific. Use a dedicated test domain and mailbox, require TLS, publish the exact returned records, send through the HTTPS endpoint, download the received raw message, and validate its DKIM signature with an independent verifier. Also stop the relay temporarily to confirm the message remains `retrying`, then restore it and confirm `sent`. Do not treat a test that merely finds a `DKIM-Signature` header as end-to-end validation.
+
+For provider-free direct-to-MX delivery, follow [self-hosted-mta.md](self-hosted-mta.md). That mode requires dedicated egress and PTR control and therefore cannot be operated correctly from Fly alone.

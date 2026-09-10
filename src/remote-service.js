@@ -154,7 +154,6 @@ export function createMailPortService(
         operations?.enforceRate(principal, payload.identity, recipients, rateLimits);
         payload.__applicationId = principal.application_id; payload.__tenantId = principal.tenant_id;
         if (identity) payload.__identityAddress = identity.address;
-        if (identity) payload.__dkim = operations.signingForIdentity(identity.identity, principal);
         const message = body.template
           ? await mail.send(body.template, payload)
           : await mail.send(body);

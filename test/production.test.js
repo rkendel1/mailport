@@ -39,3 +39,13 @@ test("DKIM private keys are not persisted in operational records", () => {
   operations.createDomain("example.test");
   assert.equal(fs.readFileSync(filePath, "utf8").includes("PRIVATE KEY"), false);
 });
+
+test("DKIM private keys are not persisted in outbox messages", async () => {
+  const filePath = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "mailport-outbox-secret-")), "outbox.json");
+  const mail = createMailPort({ identities: { system: "system@example.test" }, transport: "local",
+    outbox: { filePath, workerEnabled: false } });
+  await mail.send({ identity: "system", to: "user@example.test", subject: "x", text: "x",
+    __dkim: { privateKey: "PRIVATE KEY MATERIAL", domain: "example.test", selector: "mp1" } });
+  assert.equal(fs.readFileSync(filePath, "utf8").includes("PRIVATE KEY MATERIAL"), false);
+  await mail.close();
+});

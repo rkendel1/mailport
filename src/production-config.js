@@ -15,6 +15,11 @@ export function validateProductionConfig(options = {}, environment = process.env
     for (const name of ["MAILPORT_SMTP_HOST", "MAILPORT_SMTP_PORT", "MAILPORT_SMTP_USERNAME", "MAILPORT_SMTP_PASSWORD"])
       if (!environment[name] && !options.transport?.[name.slice(14).toLowerCase()]) missing.push(name);
   }
+  if (transport === "direct-mx") {
+    if (!environment.MAILPORT_MTA_HOSTNAME && !options.transport?.hostname) missing.push("MAILPORT_MTA_HOSTNAME");
+    if (!environment.MAILPORT_EGRESS_IP && !options.transport?.egressIp) missing.push("MAILPORT_EGRESS_IP");
+    if (!environment.MAILPORT_KEY_ENCRYPTION_KEY) missing.push("MAILPORT_KEY_ENCRYPTION_KEY");
+  }
   if (missing.length) throw new MailPortError(ERROR_CODES.MAIL_NOT_CONFIGURED, `Missing production configuration: ${missing.join(", ")}`);
   if (/^(dev|test)(-|$)/i.test(apiKey)) throw new MailPortError(ERROR_CODES.MAIL_NOT_CONFIGURED, "Development API keys are forbidden in production");
   if (!path.isAbsolute(outbox)) throw new MailPortError(ERROR_CODES.MAIL_NOT_CONFIGURED, "MAILPORT_OUTBOX must be an absolute persistent-storage path in production");
