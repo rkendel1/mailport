@@ -11,9 +11,17 @@ Minimal MailPort foundation implementing:
   - `GET /v1/test/messages`
   - `GET /v1/test/messages/:id`
   - `DELETE /v1/test/messages`
+- remote MailPort service + authenticated SDK transport (`transport: "remote"`)
+- optional durable outbox (`outbox.enabled` + `outbox.filePath`) with async worker retries
 
 ## Run tests
 
 ```bash
 npm test
+```
+
+## Run remote MailPort service
+
+```bash
+app mail service --port 8789 --api-key dev-key
 ```

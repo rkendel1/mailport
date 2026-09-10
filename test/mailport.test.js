@@ -130,3 +130,46 @@ test("waitFor resolves after delayed message arrival", async () => {
   });
   assert.equal(result.to[0], "later@example.com");
 });
+
+test("durable outbox retries and eventually marks sent", async () => {
+  let attempts = 0;
+  const mail = createMailPort({
+    applicationId: "appboundry",
+    transport: {
+      kind: "custom",
+      async send() {
+        attempts += 1;
+        if (attempts < 2) {
+          throw new Error("temporary failure");
+        }
+        return { status: "sent" };
+      },
+    },
+    outbox: {
+      enabled: true,
+      pollIntervalMs: 10,
+      retryBaseMs: 10,
+      maxAttempts: 3,
+    },
+    testEndpointsEnabled: true,
+    identities: { system: "notifications@myapp.com" },
+  });
+
+  const queued = await mail.send({
+    identity: "system",
+    to: "retry@example.com",
+    subject: "Retry",
+    text: "Retry body",
+  });
+  assert.equal(queued.status, "queued");
+
+  const delivered = await mail.test.waitFor({
+    to: "retry@example.com",
+    status: "sent",
+    timeoutMs: 1000,
+    intervalMs: 10,
+  });
+  assert.ok(delivered);
+  assert.equal(delivered.status, "sent");
+  assert.equal(attempts, 2);
+});
