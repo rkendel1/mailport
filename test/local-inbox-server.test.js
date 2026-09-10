@@ -30,6 +30,11 @@ test("serves test inbox and test message API", async () => {
     const inboxHtml = await inboxRes.text();
     assert.match(inboxHtml, /MailPort Test Inbox/);
     assert.match(inboxHtml, /Hello/);
+    assert.match(inboxHtml, /\/mail\//);
+
+    const detailRes = await fetch(`http://127.0.0.1:8790/mail/${sent.message_id}`);
+    const detailHtml = await detailRes.text();
+    assert.match(detailHtml, /MailPort works\./);
   } finally {
     await server.stop();
   }

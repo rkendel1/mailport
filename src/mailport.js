@@ -179,13 +179,23 @@ export function createMailPort(config) {
     },
     list(filters = {}) {
       let items = [...messages.values()];
-      if (filters.to) items = items.filter((m) => m.to.includes(filters.to));
-      if (filters.subject)
-        items = items.filter((m) => m.subject.toLowerCase().includes(filters.subject.toLowerCase()));
-      if (filters.template) items = items.filter((m) => m.template === filters.template);
-      if (filters.testRunId)
+      if (Object.hasOwn(filters, "to")) {
+        items = items.filter((m) => m.to.includes(filters.to));
+      }
+      if (Object.hasOwn(filters, "subject")) {
+        items = items.filter((m) =>
+          m.subject.toLowerCase().includes(String(filters.subject).toLowerCase())
+        );
+      }
+      if (Object.hasOwn(filters, "template")) {
+        items = items.filter((m) => m.template === filters.template);
+      }
+      if (Object.hasOwn(filters, "testRunId")) {
         items = items.filter((m) => m.metadata?.testRunId === filters.testRunId);
-      if (filters.status) items = items.filter((m) => m.status === filters.status);
+      }
+      if (Object.hasOwn(filters, "status")) {
+        items = items.filter((m) => m.status === filters.status);
+      }
       return items.map(deepClone);
     },
     test: {
