@@ -113,9 +113,11 @@ export class FileMailStore {
       const next = mutate(clone(current)); this.memory.set(id, next); this.#commit(); return clone(next);
     });
   }
-  async complete(id, token, result = {}) { return this.#finish(id, token, (m) => ({ ...m, status: "sent", delivery: result,
+  async complete(id, token, result = {}) { return this.#finish(id, token, (m) => ({ ...m, status: result.status || "sent", delivery: result,
+    provider: result.provider || null, providerMessageId: result.providerMessageId || null,
     transport: { type: result.transport || result.type || null, message_id: result.message_id || null, metadata: result.metadata || {} },
-    events: [...(m.events || []), event("message.sent", m, { transport: result.transport || result.type || null })],
+    events: [...(m.events || []), event(result.status === "accepted" ? "message.provider_accepted" : "message.sent", m,
+      { transport: result.transport || result.type || null, provider: result.provider || null })],
     sent_at: iso(), claim_token: null, claimed_by: null, lease_expires_at: null, next_retry_at: null, next_attempt_at: null, updated_at: iso() })); }
   async retry(id, token, result = {}) { return this.#finish(id, token, (m) => ({ ...m, status: "retrying",
     last_error: result.error?.message || result.error || null, next_retry_at: result.nextRetryAt,

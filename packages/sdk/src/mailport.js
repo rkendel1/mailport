@@ -55,8 +55,8 @@ function estimateSizeBytes(message) {
 
 function resolveTransportName(explicitTransport, environment = process.env) {
   if (explicitTransport && typeof explicitTransport === "object") {
-    if (typeof explicitTransport.send === "function") return "custom";
     if (typeof explicitTransport.kind === "string") return explicitTransport.kind;
+    if (typeof explicitTransport.send === "function") return "custom";
   }
   if (!explicitTransport && environment.MAILPORT_URL) return "remote";
   return (
@@ -68,7 +68,7 @@ function resolveTransportName(explicitTransport, environment = process.env) {
 }
 
 function createTransport(name, explicitTransport, environment = process.env) {
-  if (name === "custom" && explicitTransport && typeof explicitTransport.send === "function") {
+  if (explicitTransport && typeof explicitTransport.send === "function") {
     return explicitTransport;
   }
   if (name === "memory") return new MemoryTransport();
@@ -204,6 +204,7 @@ export function createMailPort(config) {
           ? JSON.stringify({ ...payload, idempotencyKey: undefined })
           : null,
         attachments,
+        headers: payload.headers || {},
         status: "accepted",
         accepted_at: now,
         created_at: now,
@@ -257,6 +258,9 @@ export function createMailPort(config) {
       try {
         const delivery = await transport.send(message);
         message.status = delivery.status || "sent";
+        message.delivery = delivery;
+        message.provider = delivery.provider || null;
+        message.providerMessageId = delivery.providerMessageId || null;
       } catch (error) {
         message.status = "failed";
         message.last_error = error.message;

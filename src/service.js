@@ -6,6 +6,7 @@ import { createDeliveryEventSource } from "./delivery-events.js";
 import { FileSigningKeyStore } from "./signing-key-store.js";
 import { validateMtaEgress, validateMtaIdentity } from "./mta-readiness.js";
 import { createDirectMxTransport, createSmtpTransport } from "./transports.js";
+import { createCloudflareTransport } from "./cloudflare-transport.js";
 
 export function createMailService(options = {}) {
   const environment = options.environment || process.env;
@@ -28,12 +29,19 @@ export function createMailService(options = {}) {
     password: transportConfig.password || environment.MAILPORT_SMTP_PASSWORD, secure: transportConfig.secure ?? environment.MAILPORT_SMTP_SECURE === "true",
     requireTLS: transportConfig.requireTLS ?? (environment.MAILPORT_SMTP_REQUIRE_TLS === "true" || environment.NODE_ENV === "production"),
     signingResolver: (message) => operations?.signingForMessage(message) });
+  if (transportType === "cloudflare") transportConfig = createCloudflareTransport({
+    ...(typeof transportConfig === "object" ? transportConfig : {}),
+    accountId: transportConfig.accountId || environment.MAILPORT_CLOUDFLARE_ACCOUNT_ID,
+    apiToken: transportConfig.apiToken || environment.MAILPORT_CLOUDFLARE_API_TOKEN,
+    baseUrl: transportConfig.baseUrl || environment.MAILPORT_CLOUDFLARE_BASE_URL,
+  });
+  const testTransport = ["memory", "local"].includes(transportConfig.kind);
   const mail = createMailPort({
     applicationId: options.applicationId || environment.MAILPORT_APPLICATION_ID || "app",
     identities: options.identities || { system: "notifications@example.test" },
     templates: options.templates || {}, environment,
     transport: transportConfig,
-    testEndpointsEnabled: options.testEndpointsEnabled ?? transportConfig.kind !== "smtp",
+    testEndpointsEnabled: options.testEndpointsEnabled ?? testTransport,
     outbox: { enabled: true, filePath: options.outbox?.filePath || environment.MAILPORT_OUTBOX || ".mailport/outbox.json",
       workerEnabled: worker.enabled !== false, pollIntervalMs: worker.pollIntervalMs,
       leaseMs: worker.leaseMs, maxAttempts: worker.maxAttempts, retryBaseMs: worker.retryBaseMs },
@@ -56,7 +64,7 @@ export function createMailService(options = {}) {
     apiKey: options.apiKey || environment.MAILPORT_API_KEY,
     adminKey: options.adminKey || environment.MAILPORT_ADMIN_KEY, operations, rateLimits: options.limits,
     applicationId: options.applicationId || environment.MAILPORT_APPLICATION_ID || "app", production, deliveryEvents,
-    maxBodyBytes: options.maxBodyBytes, testEndpointsEnabled: options.testEndpointsEnabled ?? transportConfig.kind !== "smtp" });
+    maxBodyBytes: options.maxBodyBytes, testEndpointsEnabled: options.testEndpointsEnabled ?? testTransport });
   const startServer = server.start;
   return { ...server, async start() {
     if (production.production && transportType === "direct-mx") {
@@ -67,5 +75,5 @@ export function createMailService(options = {}) {
         fetcher: options.mta?.fetcher });
     }
     return startServer();
-  }, mail, operations, deliveryEvents, production, config: options };
+  }, mail, operations, deliveryEvents, production, config: { transport: transportType, production: production.production } };
 }

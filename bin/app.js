@@ -22,6 +22,16 @@ function printStatus(mail) {
   console.log("Delivery        OK");
 }
 
+function printTransportStatus(status = {}) {
+  const transport = status.transport || process.env.MAILPORT_TRANSPORT || process.env.FELTDB_MAIL_TRANSPORT || "memory";
+  console.log("MailPort transport"); console.log(`Transport: ${transport}`);
+  if (transport === "cloudflare") {
+    console.log(`Status: ${process.env.MAILPORT_CLOUDFLARE_ACCOUNT_ID && process.env.MAILPORT_CLOUDFLARE_API_TOKEN ? "configured" : "not configured"}`);
+    console.log(`Account: ${process.env.MAILPORT_CLOUDFLARE_ACCOUNT_ID ? "********" : "missing"}`);
+    console.log(`API token: ${process.env.MAILPORT_CLOUDFLARE_API_TOKEN ? "configured" : "missing"}`);
+  } else console.log("Status: configured");
+}
+
 function printDomain(domain) {
   console.log("MailPort Domain"); console.log(domain.domain); console.log(`Status: ${domain.status.toUpperCase()}`);
   for (const [label, status] of [["Domain ownership", domain.verification?.status], ["DKIM", domain.authentication?.dkim],
@@ -78,6 +88,11 @@ async function main() {
       const remote = await getRemote();
       console.log(JSON.stringify(await remote.status(), null, 2));
     } else printStatus(await getMail());
+    return;
+  }
+
+  if (args[1] === "transport" && args[2] === "status") {
+    printTransportStatus(process.env.MAILPORT_URL ? await (await getRemote()).status() : { transport });
     return;
   }
 
@@ -143,7 +158,8 @@ async function main() {
         "Usage: app mail send --to <email> --from <identity> --subject <subject> --text <text> [--html <html>]"
       );
     }
-    const message = await (await getMail()).send({
+    const target = await getRemote() || await getMail();
+    const message = await target.send({
       identity: from,
       to,
       subject,

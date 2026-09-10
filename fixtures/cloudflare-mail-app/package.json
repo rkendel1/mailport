@@ -1,0 +1,12 @@
+{
+  "name": "mailport-cloudflare-e2e-fixture",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@mailerport/core": "0.1.0",
+    "@mailerport/mime": "0.1.0",
+    "@mailerport/sdk": "0.1.0",
+    "@mailerport/smtp": "0.1.0"
+  }
+}
