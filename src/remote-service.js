@@ -19,9 +19,9 @@ function parseQueryFilters(searchParams) {
 }
 
 function parseAuthorization(req) {
-  const header = req.headers.authorization || "";
-  if (!header.startsWith("Bearer ")) return null;
-  return header.slice("Bearer ".length).trim();
+  const header = req.headers.authorization;
+  if (typeof header !== "string" || !/^Bearer [^\s]+$/.test(header)) return null;
+  return header.slice(7);
 }
 
 async function readJsonBody(req, maxBodyBytes) {
@@ -68,11 +68,17 @@ export function createMailPortService(
         return sendJson(res, 200, { ok: true });
       }
       if (req.method === "GET" && url.pathname === "/ready") {
+        await mail.list();
         return sendJson(res, 200, { ready: true });
       }
 
       if (url.pathname.startsWith("/v1/")) {
         assertAuthorized(req, apiKey);
+      }
+
+      if (req.method === "GET" && url.pathname === "/v1/status") {
+        const status = typeof mail.status === "function" ? await mail.status() : {};
+        return sendJson(res, 200, { service: "mailport", version: "1.0.0", ...status });
       }
 
       if (req.method === "POST" && url.pathname === "/v1/messages") {

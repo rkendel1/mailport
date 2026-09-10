@@ -1,239 +1,138 @@
 import fs from "node:fs";
+import path from "node:path";
 import { randomUUID } from "node:crypto";
+import { MailPortError, ERROR_CODES } from "./errors.js";
 
 const sleepBuffer = new Int32Array(new SharedArrayBuffer(4));
+const clone = (value) => structuredClone(value);
+const iso = (time = Date.now()) => new Date(time).toISOString();
 
-function sleepMs(ms) {
-  Atomics.wait(sleepBuffer, 0, 0, ms);
-}
-
-function deepClone(value) {
-  if (typeof structuredClone === "function") {
-    return structuredClone(value);
-  }
-  return JSON.parse(JSON.stringify(value));
-}
-
-function nowIso() {
-  return new Date().toISOString();
-}
-
-class FileBackedMessages {
-  constructor(filePath) {
+export class FileMailStore {
+  constructor({ filePath } = {}) {
     this.filePath = filePath;
     this.lockPath = filePath ? `${filePath}.lock` : null;
-    this.messages = new Map();
-    this.#load();
+    this.memory = new Map();
+    this.#reload();
   }
-
-  #withLock(callback, { retryCount = 20, retryDelayMs = 5 } = {}) {
-    if (!this.lockPath) {
-      return callback();
-    }
-    let lockFd = null;
-    for (let attempt = 0; attempt <= retryCount; attempt += 1) {
-      try {
-        lockFd = fs.openSync(this.lockPath, "wx");
-        break;
-      } catch (error) {
-        if (!error || error.code !== "EEXIST") {
-          throw error;
-        }
-        if (attempt === retryCount) {
-          throw new Error("Outbox lock contention: unable to acquire file lock");
-        }
-        sleepMs(retryDelayMs);
-      }
-    }
-
-    try {
-      this.messages.clear();
-      this.#load();
-      return callback();
-    } finally {
-      if (lockFd !== null) {
-        fs.closeSync(lockFd);
-      }
-      if (fs.existsSync(this.lockPath)) {
-        fs.unlinkSync(this.lockPath);
-      }
-    }
-  }
-
-  #load() {
-    if (!this.filePath || !fs.existsSync(this.filePath)) return;
-    const raw = fs.readFileSync(this.filePath, "utf8");
-    if (!raw.trim()) return;
-    const items = JSON.parse(raw);
-    for (const item of items) {
-      this.messages.set(item.message_id, item);
-    }
-  }
-
-  #persist() {
+  #reload() {
     if (!this.filePath) return;
-    fs.writeFileSync(
-      this.filePath,
-      JSON.stringify([...this.messages.values()], null, 2),
-      "utf8"
-    );
+    this.memory.clear();
+    if (!fs.existsSync(this.filePath)) return;
+    const raw = fs.readFileSync(this.filePath, "utf8");
+    for (const item of raw.trim() ? JSON.parse(raw) : []) this.memory.set(item.message_id, item);
   }
-
-  get(messageId) {
-    const message = this.messages.get(messageId);
-    return message ? deepClone(message) : null;
+  #commit() {
+    if (!this.filePath) return;
+    const directoryPath = path.dirname(path.resolve(this.filePath));
+    fs.mkdirSync(directoryPath, { recursive: true });
+    const temporary = `${this.filePath}.${process.pid}.${randomUUID()}.tmp`;
+    const fd = fs.openSync(temporary, "wx", 0o600);
+    try { fs.writeFileSync(fd, JSON.stringify([...this.memory.values()], null, 2)); fs.fsyncSync(fd); }
+    finally { fs.closeSync(fd); }
+    fs.renameSync(temporary, this.filePath);
+    const directory = fs.openSync(directoryPath, "r");
+    try { fs.fsyncSync(directory); } finally { fs.closeSync(directory); }
   }
-
-  list() {
-    return [...this.messages.values()].map(deepClone);
-  }
-
-  put(message) {
-    this.#withLock(() => {
-      this.messages.set(message.message_id, deepClone(message));
-      this.#persist();
-    });
-  }
-
-  findOne(predicate) {
-    for (const message of this.messages.values()) {
-      if (predicate(message)) return deepClone(message);
-    }
-    return null;
-  }
-
-  clear() {
-    this.#withLock(() => {
-      this.messages.clear();
-      this.#persist();
-    });
-  }
-
-  claimOne(predicate, updater) {
-    return this.#withLock(() => {
-      for (const message of this.messages.values()) {
-        if (!predicate(message)) continue;
-        const updated = updater(deepClone(message));
-        this.messages.set(updated.message_id, deepClone(updated));
-        this.#persist();
-        return updated;
-      }
-      return null;
-    });
-  }
-}
-
-export function createOutbox({ filePath } = {}) {
-  const storage = new FileBackedMessages(filePath);
-
-  return {
-    get(messageId) {
-      return storage.get(messageId);
-    },
-    list() {
-      return storage.list();
-    },
-    clear() {
-      storage.clear();
-    },
-    findByIdempotencyKey(idempotencyKey) {
-      if (!idempotencyKey) return null;
-      return (
-        storage
-          .list()
-          .find((message) => message.idempotencyKey && message.idempotencyKey === idempotencyKey) ||
-        null
-      );
-    },
-    put(message) {
-      storage.put(message);
-    },
-    claimNext({ leaseMs = 30_000 } = {}) {
-      const now = Date.now();
-      const candidate = storage.claimOne(
-        (message) => {
-        if (message.status !== "queued") return false;
-        const nextRetry = message.next_retry_at ? Date.parse(message.next_retry_at) : 0;
-        if (nextRetry > now) return false;
-        const leasedUntil = message.lease_expires_at ? Date.parse(message.lease_expires_at) : 0;
-        return !leasedUntil || leasedUntil <= now;
-        },
-        (message) => ({
-          ...message,
-          lease_token: `lease-${randomUUID().replace(/-/g, "")}`,
-          lease_expires_at: new Date(now + leaseMs).toISOString(),
-          updated_at: nowIso(),
-        })
-      );
-      return candidate || null;
-    },
-    markSent(messageId, status = "sent") {
-      const message = storage.get(messageId);
-      if (!message) return null;
-      const next = {
-        ...message,
-        status,
-        lease_token: null,
-        lease_expires_at: null,
-        next_retry_at: null,
-        updated_at: nowIso(),
-      };
-      storage.put(next);
-      return next;
-    },
-    markDeliveryFailure(messageId, error, { maxAttempts = 3, retryBaseMs = 250 } = {}) {
-      const message = storage.get(messageId);
-      if (!message) return null;
-      const attempts = (message.delivery_attempts || 0) + 1;
-      const exhausted = attempts >= maxAttempts;
-      const next = {
-        ...message,
-        delivery_attempts: attempts,
-        status: exhausted ? "failed" : "queued",
-        lease_token: null,
-        lease_expires_at: null,
-        next_retry_at: exhausted
-          ? null
-          : new Date(Date.now() + retryBaseMs * 2 ** (attempts - 1)).toISOString(),
-        updated_at: nowIso(),
-        last_error: error?.message || String(error),
-      };
-      storage.put(next);
-      return next;
-    },
-  };
-}
-
-export function createOutboxWorker({
-  outbox,
-  transport,
-  maxAttempts = 3,
-  retryBaseMs = 250,
-  leaseMs = 30_000,
-} = {}) {
-  let running = false;
-
-  return {
-    async tick() {
-      if (running) return;
-      running = true;
-      try {
-        while (true) {
-          const message = outbox.claimNext({ leaseMs });
-          if (!message) return;
-          try {
-            const delivery = await transport.send(message);
-            outbox.markSent(message.message_id, delivery?.status || "sent");
-          } catch (error) {
-            outbox.markDeliveryFailure(message.message_id, error, {
-              maxAttempts,
-              retryBaseMs,
-            });
+  #locked(callback) {
+    if (!this.lockPath) return callback();
+    fs.mkdirSync(path.dirname(path.resolve(this.lockPath)), { recursive: true });
+    let fd;
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      try { fd = fs.openSync(this.lockPath, "wx", 0o600); fs.writeFileSync(fd, String(process.pid)); break; }
+      catch (error) {
+        if (error.code !== "EEXIST" || attempt === 99) throw error;
+        try {
+          const owner = Number(fs.readFileSync(this.lockPath, "utf8"));
+          if (owner) process.kill(owner, 0);
+        } catch (ownerError) {
+          if (ownerError.code === "ESRCH" || ownerError.code === "ENOENT") {
+            try { fs.unlinkSync(this.lockPath); } catch {}
+            continue;
           }
         }
-      } finally {
-        running = false;
+        Atomics.wait(sleepBuffer, 0, 0, 5);
       }
+    }
+    try { this.#reload(); return callback(); }
+    finally { if (fd !== undefined) fs.closeSync(fd); try { fs.unlinkSync(this.lockPath); } catch {} }
+  }
+  create(message) {
+    return this.#locked(() => {
+      if (message.idempotencyKey) {
+        const existing = [...this.memory.values()].find((m) => m.idempotencyKey === message.idempotencyKey);
+        if (existing) return clone(existing);
+      }
+      this.memory.set(message.message_id, clone(message)); this.#commit(); return clone(message);
+    });
+  }
+  get(id) { this.#reload(); return this.memory.has(id) ? clone(this.memory.get(id)) : null; }
+  list() { this.#reload(); return [...this.memory.values()].map(clone); }
+  findByIdempotencyKey(key) { return key ? this.list().find((m) => m.idempotencyKey === key) || null : null; }
+  clear() { return this.#locked(() => { this.memory.clear(); this.#commit(); }); }
+  claimNext(workerId, { leaseMs = 30_000 } = {}) {
+    return this.#locked(() => {
+      const now = Date.now();
+      const candidate = [...this.memory.values()].find((m) => {
+        if (!["queued", "leased", "sending", "retrying"].includes(m.status)) return false;
+        if (m.next_retry_at && Date.parse(m.next_retry_at) > now) return false;
+        return !m.lease_expires_at || Date.parse(m.lease_expires_at) <= now;
+      });
+      if (!candidate) return null;
+      const next = { ...candidate, status: "leased", claimed_by: workerId,
+        claim_token: `claim_${randomUUID().replaceAll("-", "")}`,
+        lease_expires_at: iso(now + leaseMs), attempt: (candidate.attempt || 0) + 1, updated_at: iso(now) };
+      this.memory.set(next.message_id, next); this.#commit(); return clone(next);
+    });
+  }
+  async #finish(id, token, mutate) {
+    return this.#locked(() => {
+      const current = this.memory.get(id);
+      if (!current || current.claim_token !== token || Date.parse(current.lease_expires_at) <= Date.now()) {
+        throw new MailPortError(ERROR_CODES.MAIL_LEASE_LOST, "Message lease is no longer owned");
+      }
+      const next = mutate(clone(current)); this.memory.set(id, next); this.#commit(); return clone(next);
+    });
+  }
+  async complete(id, token, result = {}) { return this.#finish(id, token, (m) => ({ ...m, status: "sent", delivery: result,
+    sent_at: iso(), claim_token: null, claimed_by: null, lease_expires_at: null, next_retry_at: null, updated_at: iso() })); }
+  async retry(id, token, result = {}) { return this.#finish(id, token, (m) => ({ ...m, status: "retrying",
+    last_error: result.error?.message || result.error || null, next_retry_at: result.nextRetryAt,
+    claim_token: null, claimed_by: null, lease_expires_at: null, updated_at: iso() })); }
+  async fail(id, token, result = {}) { return this.#finish(id, token, (m) => ({ ...m, status: "failed",
+    last_error: result.error?.message || result.error || null, failed_at: iso(), claim_token: null,
+    claimed_by: null, lease_expires_at: null, next_retry_at: null, updated_at: iso() })); }
+}
+
+export function createOutbox({ filePath, store } = {}) { return store || new FileMailStore({ filePath }); }
+
+export function createOutboxWorker({ outbox, transport, workerId = `worker_${randomUUID()}`,
+  maxAttempts = 5, retryBaseMs = 250, leaseMs = 30_000 } = {}) {
+  let running = false; let active = 0;
+  return {
+    get running() { return running; }, get active() { return active; }, workerId,
+    async tick() {
+      if (running) return; running = true;
+      try {
+        while (true) {
+          const message = await outbox.claimNext(workerId, { leaseMs });
+          if (!message) break;
+          active += 1;
+          try {
+            const result = await transport.send(message);
+            if (result?.status === "failed") await outbox.fail(message.message_id, message.claim_token, result);
+            else if (result?.status === "retry") await outbox.retry(message.message_id, message.claim_token, { ...result,
+              nextRetryAt: iso(Date.now() + retryBaseMs * 2 ** (message.attempt - 1)) });
+            else await outbox.complete(message.message_id, message.claim_token, result);
+          } catch (error) {
+            if (error?.code === ERROR_CODES.MAIL_LEASE_LOST) continue;
+            try {
+              if (message.attempt >= maxAttempts) await outbox.fail(message.message_id, message.claim_token, { error });
+              else await outbox.retry(message.message_id, message.claim_token, { error,
+                nextRetryAt: iso(Date.now() + retryBaseMs * 2 ** (message.attempt - 1)) });
+            } catch (finishError) { if (finishError?.code !== ERROR_CODES.MAIL_LEASE_LOST) throw finishError; }
+          } finally { active -= 1; }
+        }
+      } finally { running = false; }
     },
   };
 }

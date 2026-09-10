@@ -2,6 +2,7 @@
 import { createMailPort } from "../src/mailport.js";
 import { createLocalInboxServer } from "../src/local-inbox-server.js";
 import { createMailPortService } from "../src/remote-service.js";
+import { createRemoteMailPortClient } from "../src/remote-client.js";
 
 function readFlag(args, name) {
   const i = args.indexOf(name);
@@ -43,7 +44,10 @@ async function main() {
   });
 
   if (args[1] === "status") {
-    printStatus(mail);
+    if (process.env.MAILPORT_URL) {
+      console.log(JSON.stringify(await createRemoteMailPortClient({ baseUrl: process.env.MAILPORT_URL,
+        apiKey: process.env.MAILPORT_API_KEY }).status(), null, 2));
+    } else printStatus(mail);
     return;
   }
 
@@ -59,10 +63,11 @@ async function main() {
     const host = readFlag(args, "--host") || "127.0.0.1";
     const port = Number(readFlag(args, "--port") || 8789);
     const apiKey = readFlag(args, "--api-key") || process.env.MAILPORT_API_KEY;
-    const outboxFile = readFlag(args, "--outbox-file");
+    const outboxFile = readFlag(args, "--outbox") || readFlag(args, "--outbox-file") || process.env.MAILPORT_OUTBOX;
+    const serviceTransport = readFlag(args, "--transport") || transport;
     const serviceMail = createMailPort({
       applicationId: process.env.MAILPORT_APPLICATION_ID || "app",
-      transport,
+      transport: serviceTransport,
       identities: { system: "notifications@example.test" },
       testEndpointsEnabled: true,
       outbox: {

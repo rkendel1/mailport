@@ -71,6 +71,7 @@ export function createRemoteMailPortClient({
     async list(filters = {}) {
       return request(`/v1/messages${toQueryString(filters)}`);
     },
+    async status() { return request("/v1/status"); },
     test: {
       async list(filters = {}) {
         if (!testEndpointsEnabled) {

@@ -1,6 +1,10 @@
 export { createMailPort } from "./mailport.js";
 export { createLocalInboxServer } from "./local-inbox-server.js";
 export { createMailPortService } from "./remote-service.js";
+export { createMailService } from "./service.js";
 export { createRemoteMailPortClient } from "./remote-client.js";
+export { FileMailStore, createOutbox, createOutboxWorker } from "./outbox.js";
+export { createMimeMessage } from "./mime.js";
+export { createSmtpTransport, SmtpTransport, MemoryTransport, LocalTransport } from "./transports.js";
 export { parseMailDsl, generateMailContractSnapshot } from "./dsl.js";
 export { MailPortError, ERROR_CODES } from "./errors.js";

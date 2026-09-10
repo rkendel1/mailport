@@ -9,6 +9,10 @@ const DEFAULT_LIMITS = {
   maxAttachmentCount: 10,
   maxAttachmentSizeBytes: 10 * 1024 * 1024,
   maxMessageSizeBytes: 25 * 1024 * 1024,
+  maxRecipientCount: 100,
+  maxSubjectLength: 998,
+  maxTextLength: 5 * 1024 * 1024,
+  maxHtmlLength: 10 * 1024 * 1024,
 };
 
 function normalizeRecipients(input) {
@@ -32,6 +36,19 @@ function assertRecipients(payload) {
   }
 }
 
+function assertSafeHeaders(payload, limits) {
+  const headers = [payload.subject, payload.from, ...normalizeRecipients(payload.to), ...normalizeRecipients(payload.cc),
+    ...normalizeRecipients(payload.bcc), ...normalizeRecipients(payload.reply_to)];
+  if (headers.some((value) => /\r|\n/.test(String(value || "")))) {
+    throw new MailPortError(ERROR_CODES.MAIL_INVALID_HEADER, "Mail headers cannot contain newlines");
+  }
+  const recipients = normalizeRecipients(payload.to).length + normalizeRecipients(payload.cc).length + normalizeRecipients(payload.bcc).length;
+  if (recipients > limits.maxRecipientCount || String(payload.subject || "").length > limits.maxSubjectLength ||
+      String(payload.text || "").length > limits.maxTextLength || String(payload.html || "").length > limits.maxHtmlLength) {
+    throw new MailPortError(ERROR_CODES.MAIL_MESSAGE_TOO_LARGE, "Message field exceeds configured limit");
+  }
+}
+
 function estimateSizeBytes(message) {
   return Buffer.byteLength(JSON.stringify(message), "utf8");
 }
@@ -41,6 +58,7 @@ function resolveTransportName(explicitTransport, environment = process.env) {
     if (typeof explicitTransport.send === "function") return "custom";
     if (typeof explicitTransport.kind === "string") return explicitTransport.kind;
   }
+  if (!explicitTransport && environment.MAILPORT_URL) return "remote";
   return (
     explicitTransport ||
     environment.FELTDB_MAIL_TRANSPORT ||
@@ -49,13 +67,20 @@ function resolveTransportName(explicitTransport, environment = process.env) {
   );
 }
 
-function createTransport(name, explicitTransport) {
+function createTransport(name, explicitTransport, environment = process.env) {
   if (name === "custom" && explicitTransport && typeof explicitTransport.send === "function") {
     return explicitTransport;
   }
   if (name === "memory") return new MemoryTransport();
   if (name === "local") return new LocalTransport();
-  if (name === "smtp") return new SmtpTransport();
+  if (name === "smtp") return new SmtpTransport({
+    ...(typeof explicitTransport === "object" ? explicitTransport : {}),
+    host: explicitTransport?.host || environment.MAILPORT_SMTP_HOST,
+    port: Number(explicitTransport?.port || environment.MAILPORT_SMTP_PORT || 25),
+    secure: explicitTransport?.secure ?? environment.MAILPORT_SMTP_SECURE === "true",
+    username: explicitTransport?.username || environment.MAILPORT_SMTP_USERNAME,
+    password: explicitTransport?.password || environment.MAILPORT_SMTP_PASSWORD,
+  });
   throw new MailPortError(ERROR_CODES.MAIL_NOT_CONFIGURED, `Unknown transport: ${name}`);
 }
 
@@ -67,15 +92,18 @@ function deepClone(value) {
 }
 
 export function createMailPort(config) {
+  config ||= {};
   const transportName = resolveTransportName(config.transport, config.environment);
   if (transportName === "remote") {
     return createRemoteMailPortClient({
+      baseUrl: config.remote?.baseUrl || config.environment?.MAILPORT_URL || process.env.MAILPORT_URL,
+      apiKey: config.remote?.apiKey || config.environment?.MAILPORT_API_KEY || process.env.MAILPORT_API_KEY,
       ...(config.remote || {}),
       testEndpointsEnabled: Boolean(config.testEndpointsEnabled),
     });
   }
 
-  const transport = createTransport(transportName, config.transport);
+  const transport = createTransport(transportName, config.transport, config.environment);
   const identities = config.identities || {};
   const templates = config.templates || {};
   const limits = { ...DEFAULT_LIMITS, ...(config.limits || {}) };
@@ -83,13 +111,6 @@ export function createMailPort(config) {
   const messages = new Map();
   const idempotency = new Map();
   const outbox = durableOutboxEnabled ? createOutbox({ filePath: config.outbox?.filePath }) : null;
-  if (durableOutboxEnabled) {
-    for (const message of outbox.list()) {
-      if (message.idempotencyKey) {
-        idempotency.set(message.idempotencyKey, message);
-      }
-    }
-  }
   const worker =
     durableOutboxEnabled && config.outbox?.workerEnabled !== false
       ? createOutboxWorker({
@@ -141,6 +162,7 @@ export function createMailPort(config) {
       }
 
       assertRecipients(payload);
+      assertSafeHeaders(payload, limits);
 
       const attachments = payload.attachments || [];
       if (attachments.length > limits.maxAttachmentCount) {
@@ -162,7 +184,7 @@ export function createMailPort(config) {
         }
       }
 
-      if (payload.idempotencyKey && idempotency.has(payload.idempotencyKey)) {
+      if (!durableOutboxEnabled && payload.idempotencyKey && idempotency.has(payload.idempotencyKey)) {
         return deepClone(idempotency.get(payload.idempotencyKey));
       }
 
@@ -185,6 +207,9 @@ export function createMailPort(config) {
         variables: payload.variables || {},
         metadata: payload.metadata || {},
         idempotencyKey: payload.idempotencyKey || null,
+        idempotencyFingerprint: payload.idempotencyKey
+          ? JSON.stringify({ ...payload, idempotencyKey: undefined })
+          : null,
         attachments,
         status: "accepted",
         created_at: now,
@@ -203,24 +228,31 @@ export function createMailPort(config) {
           ? outbox.findByIdempotencyKey(payload.idempotencyKey)
           : null;
         if (existing) {
+          if (existing.idempotencyFingerprint !== message.idempotencyFingerprint) {
+            throw new MailPortError(ERROR_CODES.MAIL_IDEMPOTENCY_CONFLICT, "Idempotency key was used for a different message");
+          }
           return deepClone(existing);
         }
 
         message.status = "queued";
-        message.delivery_attempts = 0;
+        message.attempt = 0;
         message.next_retry_at = null;
-        message.lease_token = null;
+        message.claim_token = null;
+        message.claimed_by = null;
         message.lease_expires_at = null;
         message.updated_at = new Date().toISOString();
         message.links = extractLinks({ html: message.html, text: message.text });
-        outbox.put(message);
+        const persisted = outbox.create(message);
+        if (persisted.idempotencyFingerprint !== message.idempotencyFingerprint) {
+          throw new MailPortError(ERROR_CODES.MAIL_IDEMPOTENCY_CONFLICT, "Idempotency key was used for a different message");
+        }
         if (payload.idempotencyKey) {
           idempotency.set(payload.idempotencyKey, message);
         }
         if (worker) {
           runWorkerTick();
         }
-        return deepClone(message);
+        return deepClone(persisted);
       }
 
       messages.set(messageId, message);
@@ -299,7 +331,7 @@ export function createMailPort(config) {
         }
         return mail.get(messageId);
       },
-      clear() {
+      async clear() {
         if (!config.testEndpointsEnabled) {
           throw new MailPortError(
             ERROR_CODES.MAIL_TEST_TRANSPORT_DISABLED,
@@ -309,7 +341,7 @@ export function createMailPort(config) {
         messages.clear();
         idempotency.clear();
         if (durableOutboxEnabled) {
-          outbox.clear();
+          await outbox.clear();
         }
       },
       async waitFor({ timeoutMs = 5000, intervalMs = 25, ...filters } = {}) {
@@ -321,12 +353,18 @@ export function createMailPort(config) {
         }
         const start = Date.now();
         while (Date.now() - start < timeoutMs) {
-          const found = mail.list(filters)[0];
+          const found = (await mail.list(filters))[0];
           if (found) return found;
           await new Promise((resolve) => setTimeout(resolve, intervalMs));
         }
         return null;
       },
+    },
+    async status() {
+      const items = durableOutboxEnabled ? outbox.list() : [...messages.values()];
+      const count = (status) => items.filter((m) => m.status === status).length;
+      return { transport: transportName, worker: { running: Boolean(worker), active: worker?.active || 0 },
+        outbox: { queued: count("queued"), retrying: count("retrying"), failed: count("failed") } };
     },
     async close() {
       if (workerInterval) {
