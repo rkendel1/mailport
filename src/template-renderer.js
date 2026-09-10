@@ -54,9 +54,15 @@ function extractHrefLinks(html, set) {
   const lower = html.toLowerCase();
   let cursor = 0;
   while (cursor < lower.length) {
-    const hrefIndex = lower.indexOf("href=", cursor);
+    const hrefIndex = lower.indexOf("href", cursor);
     if (hrefIndex === -1) break;
-    let valueStart = hrefIndex + 5;
+    let valueStart = hrefIndex + 4;
+    while (valueStart < html.length && /\s/.test(html[valueStart])) valueStart += 1;
+    if (html[valueStart] !== "=") {
+      cursor = valueStart + 1;
+      continue;
+    }
+    valueStart += 1;
     while (valueStart < html.length && /\s/.test(html[valueStart])) valueStart += 1;
     const quote = html[valueStart];
     if (quote !== '"' && quote !== "'") {

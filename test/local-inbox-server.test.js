@@ -26,6 +26,12 @@ test("serves test inbox and test message API", async () => {
     assert.equal(messages.length, 1);
     assert.equal(messages[0].message_id, sent.message_id);
 
+    const nullTemplateRes = await fetch(
+      "http://127.0.0.1:8790/v1/test/messages?template=null"
+    );
+    const nullTemplateMessages = await nullTemplateRes.json();
+    assert.equal(nullTemplateMessages.length, 1);
+
     const inboxRes = await fetch("http://127.0.0.1:8790/mail");
     const inboxHtml = await inboxRes.text();
     assert.match(inboxHtml, /MailPort Test Inbox/);

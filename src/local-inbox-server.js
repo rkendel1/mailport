@@ -80,6 +80,21 @@ function renderMessageDetail(message) {
 </html>`;
 }
 
+function parseQueryFilters(searchParams) {
+  const raw = Object.fromEntries(searchParams.entries());
+  const parsed = {};
+  for (const [key, value] of Object.entries(raw)) {
+    if (value === "null") {
+      parsed[key] = null;
+    } else if (value === "undefined") {
+      parsed[key] = undefined;
+    } else {
+      parsed[key] = value;
+    }
+  }
+  return parsed;
+}
+
 export function createLocalInboxServer(
   mail,
   { host = "127.0.0.1", port = 8788 } = {}
@@ -108,7 +123,7 @@ export function createLocalInboxServer(
       }
 
       if (req.method === "GET" && url.pathname === "/v1/test/messages") {
-        return sendJson(res, 200, mail.test.list(Object.fromEntries(url.searchParams.entries())));
+        return sendJson(res, 200, mail.test.list(parseQueryFilters(url.searchParams)));
       }
 
       if (req.method === "GET" && url.pathname.startsWith("/v1/test/messages/")) {
@@ -134,7 +149,17 @@ export function createLocalInboxServer(
 
   return {
     async start() {
-      await new Promise((resolve) => server.listen(port, host, resolve));
+      await new Promise((resolve, reject) => {
+        const onError = (error) => {
+          server.off("error", onError);
+          reject(error);
+        };
+        server.once("error", onError);
+        server.listen(port, host, () => {
+          server.off("error", onError);
+          resolve();
+        });
+      });
     },
     async stop() {
       await new Promise((resolve, reject) =>

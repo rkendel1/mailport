@@ -89,3 +89,44 @@ test("surfaces transport delivery errors", async () => {
       Boolean(error.details && error.details.message_id)
   );
 });
+
+test("waitFor returns null on timeout", async () => {
+  const mail = createMailPort({
+    applicationId: "appboundry",
+    transport: "memory",
+    testEndpointsEnabled: true,
+    identities: { system: "notifications@myapp.com" },
+  });
+
+  const result = await mail.test.waitFor({
+    to: "nobody@example.com",
+    timeoutMs: 50,
+    intervalMs: 10,
+  });
+  assert.equal(result, null);
+});
+
+test("waitFor resolves after delayed message arrival", async () => {
+  const mail = createMailPort({
+    applicationId: "appboundry",
+    transport: "memory",
+    testEndpointsEnabled: true,
+    identities: { system: "notifications@myapp.com" },
+  });
+
+  setTimeout(() => {
+    mail.send({
+      identity: "system",
+      to: "later@example.com",
+      subject: "Delayed",
+      text: "Delayed body",
+    });
+  }, 20);
+
+  const result = await mail.test.waitFor({
+    to: "later@example.com",
+    timeoutMs: 1000,
+    intervalMs: 10,
+  });
+  assert.equal(result.to[0], "later@example.com");
+});

@@ -51,6 +51,9 @@ function createTransport(name) {
 }
 
 function deepClone(value) {
+  if (typeof structuredClone === "function") {
+    return structuredClone(value);
+  }
   return JSON.parse(JSON.stringify(value));
 }
 
@@ -101,7 +104,10 @@ export function createMailPort(config) {
         );
       }
       for (const attachment of attachments) {
-        const contentLength = Buffer.byteLength(String(attachment.content || ""), "utf8");
+        const content = attachment.content ?? "";
+        const contentLength = Buffer.isBuffer(content)
+          ? content.length
+          : Buffer.byteLength(String(content), "utf8");
         if (contentLength > limits.maxAttachmentSizeBytes) {
           throw new MailPortError(
             ERROR_CODES.MAIL_MESSAGE_TOO_LARGE,

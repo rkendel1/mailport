@@ -47,7 +47,7 @@ export function parseMailDsl(source) {
 
 export function generateMailContractSnapshot(parsedDsl) {
   return {
-    capability: "mail",
+    capability: parsedDsl.capability,
     identities: Object.keys(parsedDsl.identities),
     templates: Object.keys(parsedDsl.templates),
   };
