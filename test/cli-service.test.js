@@ -56,7 +56,17 @@ test("service command boots with smtp transport configured in environment", asyn
   } finally {
     if (child.exitCode === null) {
       child.kill("SIGTERM");
-      await new Promise((resolve) => child.once("exit", resolve));
+      await new Promise((resolve) => {
+        const timer = setTimeout(() => {
+          if (child.exitCode === null) child.kill("SIGKILL");
+          resolve();
+        }, 1000);
+        timer.unref?.();
+        child.once("exit", () => {
+          clearTimeout(timer);
+          resolve();
+        });
+      });
     }
   }
 });
