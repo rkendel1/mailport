@@ -21,7 +21,11 @@ export function createMailService(options = {}) {
       leaseMs: worker.leaseMs, maxAttempts: worker.maxAttempts, retryBaseMs: worker.retryBaseMs },
   });
   const operations = options.operationsStore || new FileOperationsStore({ filePath: options.operations?.filePath || environment.MAILPORT_OPERATIONS,
-    resolver: options.operations?.resolver });
+    resolver: options.operations?.resolver, dnsConfig: options.operations?.dnsConfig || {
+      spfValue: environment.MAILPORT_SPF_VALUE, dmarcValue: environment.MAILPORT_DMARC_VALUE,
+      dkimSelector: environment.MAILPORT_DKIM_SELECTOR,
+      dkimCnameTargets: environment.MAILPORT_DKIM_CNAME_TARGETS?.split(",").map((value) => value.trim()).filter(Boolean),
+    } });
   for (const key of options.apiKeys || []) operations.addKey(key);
   if (environment.MAILPORT_DKIM_DOMAIN && environment.MAILPORT_DKIM_PRIVATE_KEY)
     operations.setSigningKey(environment.MAILPORT_DKIM_DOMAIN, environment.MAILPORT_DKIM_PRIVATE_KEY.replace(/\\n/g, "\n"));

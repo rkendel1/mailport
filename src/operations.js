@@ -9,9 +9,10 @@ const now = () => new Date().toISOString();
 const normalizeEmail = (email) => String(email).trim().toLowerCase();
 
 export class FileOperationsStore {
-  constructor({ filePath, resolver = dns } = {}) {
+  constructor({ filePath, resolver = dns, dnsConfig = {} } = {}) {
     this.filePath = filePath;
     this.resolver = resolver;
+    this.dnsConfig = dnsConfig;
     this.state = { domains: [], identities: [], suppressions: [], keys: [] };
     this.rate = new Map();
     this.signingKeys = new Map();
@@ -37,7 +38,8 @@ export class FileOperationsStore {
     const domain = String(domainName).trim().toLowerCase();
     const existing = this.state.domains.find((item) => item.domain === domain);
     if (existing) return clone(existing);
-    const selector = `mailport-${crypto.randomBytes(6).toString("hex")}`;
+    const selector = this.dnsConfig.dkimSelector || `mp-${crypto.randomBytes(6).toString("hex")}`;
+    const verificationToken = crypto.randomBytes(24).toString("hex");
     let privateKey = this.signingKeys.get(domain);
     let publicKey;
     if (privateKey) {
@@ -48,26 +50,48 @@ export class FileOperationsStore {
       publicKey = generated.publicKey; privateKey = generated.privateKey;
     }
     const publicValue = publicKey.replace(/-----[^-]+-----|\s/g, "");
-    const item = { domain, status: "pending", created_at: now(),
-      spf: { status: "pending", name: domain, record: "v=spf1 include:_spf.mailport.local ~all" },
+    const timestamp = now();
+    const item = { id: `dom_${randomUUID().replaceAll("-", "")}`, domain, status: "pending", created_at: timestamp, updated_at: timestamp,
+      verification: { method: "dns", token: verificationToken, status: "pending", name: domain,
+        record: `mailerport-verification=${verificationToken}` },
+      spf: { status: "pending", name: domain, record: this.dnsConfig.spfValue || "v=spf1 -all" },
       dkim: { status: "pending", selector, name: `${selector}._domainkey.${domain}`,
         record: `v=DKIM1; k=rsa; p=${publicValue}` },
-      dmarc: { status: "recommended", name: `_dmarc.${domain}`, record: "v=DMARC1; p=none; rua=mailto:dmarc@" + domain } };
+      dmarc: { status: "pending", name: `_dmarc.${domain}`, record: this.dnsConfig.dmarcValue || "v=DMARC1; p=none; rua=mailto:dmarc@" + domain } };
+    const cnameTargets = this.dnsConfig.dkimCnameTargets || [];
+    item.dns = [
+      { type: "TXT", name: "@", fqdn: domain, purpose: "verification", value: item.verification.record },
+      ...(cnameTargets.length ? cnameTargets.map((target, index) => ({ type: "CNAME", name: `mp${index + 1}._domainkey`,
+        fqdn: `mp${index + 1}._domainkey.${domain}`, purpose: "dkim", value: target })) :
+        [{ type: "TXT", name: `${selector}._domainkey`, fqdn: item.dkim.name, purpose: "dkim", value: item.dkim.record }]),
+      { type: "TXT", name: "@", fqdn: domain, purpose: "spf", value: item.spf.record },
+      { type: "TXT", name: "_dmarc", fqdn: item.dmarc.name, purpose: "dmarc", value: item.dmarc.record },
+    ];
     this.signingKeys.set(domain, privateKey);
     this.state.domains.push(item); this.#save(); return this.#publicDomain(item);
   }
-  #publicDomain(item) { const value = clone(item); if (value?.dkim) delete value.dkim.private_key; return value; }
+  #publicDomain(item) { const value = clone(item); if (value?.dkim) delete value.dkim.private_key;
+    value.createdAt = value.created_at; value.updatedAt = value.updated_at;
+    value.authentication = { spf: value.spf.status, dkim: value.dkim.status, dmarc: value.dmarc.status };
+    if (value.verification.verified_at) value.verification.verifiedAt = value.verification.verified_at;
+    return value; }
   listDomains() { return this.state.domains.map((item) => this.#publicDomain(item)); }
   getDomain(domain) { const item = this.state.domains.find((value) => value.domain === domain); return item ? this.#publicDomain(item) : null; }
+  getDomainDns(domain) { return this.getDomain(domain)?.dns || null; }
   deleteDomain(domain) { this.state.domains = this.state.domains.filter((item) => item.domain !== domain); this.#save(); }
   async verifyDomain(domainName) {
     const item = this.state.domains.find((value) => value.domain === domainName);
     if (!item) return null;
-    item.status = "verifying"; this.#save();
-    const checks = async (name, record) => { try { return (await this.resolver.resolveTxt(name)).flat().join("").includes(record); } catch { return false; } };
-    const [spf, dkim] = await Promise.all([checks(item.spf.name, item.spf.record), checks(item.dkim.name, item.dkim.record)]);
-    item.spf.status = spf ? "verified" : "pending"; item.dkim.status = dkim ? "verified" : "pending";
-    item.status = spf && dkim ? "active" : "pending"; item.verified_at = item.status === "active" ? now() : null;
+    const matches = async (record) => { try { const answers = record.type === "CNAME"
+      ? await this.resolver.resolveCname(record.fqdn) : (await this.resolver.resolveTxt(record.fqdn)).map((parts) => parts.join(""));
+      return answers.some((answer) => String(answer).replace(/\.$/, "") === String(record.value).replace(/\.$/, "")); } catch { return false; } };
+    const results = await Promise.all(item.dns.map(matches));
+    const has = (purpose) => item.dns.map((record, index) => record.purpose !== purpose || results[index]).every(Boolean);
+    const ownership = has("verification"), spf = has("spf"), dkim = has("dkim"), dmarc = has("dmarc");
+    item.verification.status = ownership ? "verified" : "pending"; item.verification.verified_at = ownership ? now() : null;
+    item.spf.status = spf ? "verified" : "pending"; item.dkim.status = dkim ? "verified" : "pending"; item.dmarc.status = dmarc ? "verified" : "pending";
+    item.status = ownership && spf && dkim && dmarc ? "active" : ownership ? "verified" : "pending";
+    item.verified_at = item.status === "active" ? now() : null; item.updated_at = now();
     for (const identity of this.state.identities.filter((value) => value.domain === item.domain)) identity.status = item.status === "active" ? "active" : "pending";
     this.#save(); return this.#publicDomain(item);
   }

@@ -20,6 +20,8 @@ Production startup rejects missing API, outbox, transport, and SMTP settings; de
 
 Run `app mail domain add example.com` with `MAILPORT_URL` and `MAILPORT_ADMIN_KEY` configured. Publish the returned SPF and DKIM TXT records and the recommended DMARC TXT record. MailPort never edits DNS. After public DNS propagation, run `app mail domain verify example.com` and inspect `app mail domains`.
 
+Provider-managed DKIM can be configured with `MAILPORT_DKIM_CNAME_TARGETS` (comma-separated), while `MAILPORT_SPF_VALUE` and `MAILPORT_DMARC_VALUE` supply the exact provider-authorized policies. Without CNAME targets, MailPort emits its signer public key as a DKIM TXT record. Ownership, every DKIM record, SPF, and DMARC are resolved independently; a domain is not active until all are present.
+
 DKIM private material belongs in Fly secrets or another secret manager. It is never returned by domain, status, message, or event endpoints. Set `MAILPORT_DKIM_DOMAIN` and `MAILPORT_DKIM_PRIVATE_KEY` on every service instance that sends for an active domain.
 
 ## Delivery semantics

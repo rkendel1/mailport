@@ -1,4 +1,5 @@
-import type { MailPort } from "@mailerport/sdk";
+import type { MailMessage } from "@mailerport/core";
+interface MailPort { send(options:Record<string,unknown>):Promise<MailMessage>; get(id:string):MailMessage|null|Promise<MailMessage|null>; list(filters?:Record<string,unknown>):MailMessage[]|Promise<MailMessage[]>; close():void|Promise<void> }
 export interface MailServiceOptions { host?:string;port?:number;apiKey?:string;adminKey?:string;applicationId?:string;production?:boolean;transport?:string|Record<string,unknown>;outbox?:{filePath?:string};worker?:{enabled?:boolean;concurrency?:number;pollIntervalMs?:number;leaseMs?:number;maxAttempts?:number};identities?:Record<string,string>;templates?:Record<string,unknown>;testEndpointsEnabled?:boolean;environment?:Record<string,string|undefined> }
 export interface MailService { mail:MailPort;operations:unknown;start():Promise<void>;stop():Promise<void> }
 export function createMailService(options?:MailServiceOptions):MailService;

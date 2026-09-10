@@ -1,4 +1,4 @@
-import { createMailPort } from "@mailerport/sdk";
+import { createMailPort } from "./mailport.js";
 import { createSmtpTransport } from "@mailerport/smtp";
 import { createMailPortService } from "./remote-service.js";
 import { FileOperationsStore } from "./operations.js";
@@ -11,11 +11,11 @@ export function createMailService(options = {}) {
   const worker = options.worker || {};
   const transport = options.transport || { type: environment.MAILPORT_TRANSPORT || "local" };
   let transportConfig = typeof transport === "string" ? transport : { ...transport, kind: transport.kind || transport.type };
-  if ((transportConfig === "smtp" || transportConfig.kind === "smtp" || transportConfig.type === "smtp")) {
-    transportConfig = createSmtpTransport({
-      ...(typeof transportConfig === "object" ? transportConfig : {}), host: transportConfig.host || environment.MAILPORT_SMTP_HOST,
-      port: Number(transportConfig.port || environment.MAILPORT_SMTP_PORT || 25), username: transportConfig.username || environment.MAILPORT_SMTP_USERNAME,
-      password: transportConfig.password || environment.MAILPORT_SMTP_PASSWORD, secure: transportConfig.secure ?? environment.MAILPORT_SMTP_SECURE === "true",
+  if (transportConfig === "smtp" || transportConfig.kind === "smtp" || transportConfig.type === "smtp") {
+    transportConfig = createSmtpTransport({ ...(typeof transportConfig === "object" ? transportConfig : {}),
+      host: transportConfig.host || environment.MAILPORT_SMTP_HOST, port: Number(transportConfig.port || environment.MAILPORT_SMTP_PORT || 25),
+      username: transportConfig.username || environment.MAILPORT_SMTP_USERNAME, password: transportConfig.password || environment.MAILPORT_SMTP_PASSWORD,
+      secure: transportConfig.secure ?? environment.MAILPORT_SMTP_SECURE === "true",
       requireTLS: transportConfig.requireTLS ?? (environment.MAILPORT_SMTP_REQUIRE_TLS === "true" || environment.NODE_ENV === "production") });
   }
   const mail = createMailPort({
@@ -29,7 +29,11 @@ export function createMailService(options = {}) {
       leaseMs: worker.leaseMs, maxAttempts: worker.maxAttempts, retryBaseMs: worker.retryBaseMs },
   });
   const operations = options.operationsStore || new FileOperationsStore({ filePath: options.operations?.filePath || environment.MAILPORT_OPERATIONS,
-    resolver: options.operations?.resolver });
+    resolver: options.operations?.resolver, dnsConfig: options.operations?.dnsConfig || {
+      spfValue: environment.MAILPORT_SPF_VALUE, dmarcValue: environment.MAILPORT_DMARC_VALUE,
+      dkimSelector: environment.MAILPORT_DKIM_SELECTOR,
+      dkimCnameTargets: environment.MAILPORT_DKIM_CNAME_TARGETS?.split(",").map((value) => value.trim()).filter(Boolean),
+    } });
   for (const key of options.apiKeys || []) operations.addKey(key);
   if (environment.MAILPORT_DKIM_DOMAIN && environment.MAILPORT_DKIM_PRIVATE_KEY)
     operations.setSigningKey(environment.MAILPORT_DKIM_DOMAIN, environment.MAILPORT_DKIM_PRIVATE_KEY.replace(/\\n/g, "\n"));

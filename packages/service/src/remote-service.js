@@ -111,6 +111,7 @@ export function createMailPortService(
         requireAdmin(principal);
         const parts = url.pathname.split("/"); const domain = decodeURIComponent(parts[3]);
         if (req.method === "POST" && parts[4] === "verify") return sendJson(res, 200, await operations.verifyDomain(domain));
+        if (req.method === "GET" && parts[4] === "dns") { const records = operations.getDomainDns(domain); return records ? sendJson(res, 200, records) : sendJson(res, 404, { error: "not_found" }); }
         if (req.method === "GET") { const item = operations.getDomain(domain); return item ? sendJson(res, 200, item) : sendJson(res, 404, { error: "not_found" }); }
         if (req.method === "DELETE") { operations.deleteDomain(domain); return sendJson(res, 200, { deleted: true }); }
       }
@@ -145,7 +146,8 @@ export function createMailPortService(
         const payload = body.template ? body.payload || {} : body;
         const identity = operations?.listIdentities(principal).find((item) => item.identity === payload.identity &&
           (!item.tenant_id || item.tenant_id === principal.tenant_id));
-        if (identity && identity.status !== "active") throw new MailPortError(ERROR_CODES.MAIL_DOMAIN_NOT_VERIFIED, "Sending identity is not active");
+        if (production?.production && !identity) throw new MailPortError(ERROR_CODES.MAIL_IDENTITY_NOT_READY, "Sending identity is not configured");
+        if (identity && identity.status !== "active") throw new MailPortError(ERROR_CODES.MAIL_IDENTITY_NOT_READY, "Sending identity domain is not active");
         const recipients = [...(Array.isArray(payload.to) ? payload.to : [payload.to]), ...(payload.cc || []), ...(payload.bcc || [])].filter(Boolean);
         const suppressed = recipients.find((email) => operations?.isSuppressed(email, principal));
         if (suppressed) throw new MailPortError(ERROR_CODES.MAIL_RECIPIENT_SUPPRESSED, "Recipient is suppressed", { recipient: suppressed });

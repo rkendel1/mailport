@@ -74,6 +74,7 @@ export function createRemoteMailPortClient({
     async status() { return request("/v1/status"); },
     operations: {
       domains: { list: () => request("/v1/domains"), get: (domain) => request(`/v1/domains/${encodeURIComponent(domain)}`),
+        dns: (domain) => request(`/v1/domains/${encodeURIComponent(domain)}/dns`),
         add: (domain) => request("/v1/domains", { method: "POST", body: JSON.stringify({ domain }) }),
         verify: (domain) => request(`/v1/domains/${encodeURIComponent(domain)}/verify`, { method: "POST" }),
         remove: (domain) => request(`/v1/domains/${encodeURIComponent(domain)}`, { method: "DELETE" }) },
@@ -127,6 +128,7 @@ export function createRemoteMailPortClient({
     },
     close() {},
   };
+  client.domains = client.operations.domains;
 
   return client;
 }

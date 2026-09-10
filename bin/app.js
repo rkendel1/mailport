@@ -24,6 +24,18 @@ function printStatus(mail) {
   console.log("Delivery        OK");
 }
 
+function printDomain(domain) {
+  console.log("MailPort Domain"); console.log(domain.domain); console.log(`Status: ${domain.status.toUpperCase()}`);
+  for (const [label, status] of [["Domain ownership", domain.verification?.status], ["DKIM", domain.authentication?.dkim],
+    ["SPF", domain.authentication?.spf], ["DMARC", domain.authentication?.dmarc]])
+    console.log(`${status === "verified" ? "✓" : "○"} ${label}`);
+}
+function printDns(domain, records) {
+  printDomain(domain); console.log("DNS records:");
+  for (const record of records) console.log(`${record.type.padEnd(6)} ${record.name}\n       ${record.value}`);
+  console.log(`Run:\n  app mail domain verify ${domain.domain}`);
+}
+
 async function main() {
   const args = process.argv.slice(2);
   if (args[0] !== "mail") {
@@ -62,9 +74,13 @@ async function main() {
   if (args[1] === "logs") { if (!remote) throw new Error("MAILPORT_URL is required"); const id = readFlag(args, "--message");
     if (!id) throw new Error("Usage: app mail logs --message <message-id>"); console.log(JSON.stringify(await remote.operations.events(id), null, 2)); return; }
   if (args[1] === "domain" && args[2] === "add") { if (!remote) throw new Error("MAILPORT_URL is required");
-    console.log(JSON.stringify(await remote.operations.domains.add(args[3]), null, 2)); return; }
+    const domain = await remote.operations.domains.add(args[3]); printDns(domain, domain.dns); return; }
+  if (args[1] === "domain" && args[2] === "status") { if (!remote) throw new Error("MAILPORT_URL is required");
+    printDomain(await remote.operations.domains.get(args[3])); return; }
+  if (args[1] === "domain" && args[2] === "dns") { if (!remote) throw new Error("MAILPORT_URL is required");
+    const domain = await remote.operations.domains.get(args[3]); printDns(domain, await remote.operations.domains.dns(args[3])); return; }
   if (args[1] === "domain" && args[2] === "verify") { if (!remote) throw new Error("MAILPORT_URL is required");
-    console.log(JSON.stringify(await remote.operations.domains.verify(args[3]), null, 2)); return; }
+    printDomain(await remote.operations.domains.verify(args[3])); return; }
 
   if (args[1] === "dev") {
     const server = createLocalInboxServer(getMail());

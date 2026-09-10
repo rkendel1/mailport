@@ -14,10 +14,17 @@ const request = (port, token, pathname, options = {}) => fetch(`http://127.0.0.1
 test("domains activate identities after DNS verification", async () => {
   const store = new FileOperationsStore();
   const domain = store.createDomain("example.test");
+  assert.match(domain.id, /^dom_/);
+  assert.ok(domain.dns.some((record) => record.purpose === "verification"));
+  assert.ok(domain.dns.some((record) => record.purpose === "dmarc"));
   store.createIdentity({ identity: "auth", address: "auth@example.test", application_id: "a" });
-  store.resolver = { async resolveTxt(name) { return [[name === domain.spf.name ? domain.spf.record : domain.dkim.record]]; } };
+  store.resolver = {
+    async resolveTxt(name) { return domain.dns.filter((record) => record.fqdn === name && record.type === "TXT").map((record) => [record.value]); },
+    async resolveCname(name) { return domain.dns.filter((record) => record.fqdn === name && record.type === "CNAME").map((record) => record.value); },
+  };
   const verified = await store.verifyDomain("example.test");
   assert.equal(verified.status, "active");
+  assert.deepEqual(verified.authentication, { spf: "verified", dkim: "verified", dmarc: "verified" });
   assert.equal(store.listIdentities({ application_id: "a" })[0].status, "active");
   assert.equal(Object.hasOwn(verified.dkim, "private_key"), false);
 });
