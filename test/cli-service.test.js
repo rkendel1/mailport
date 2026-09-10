@@ -52,7 +52,9 @@ test("service command boots with smtp transport configured in environment", asyn
     assert.equal(exitCode, null, errors.join(""));
     assert.deepEqual(health, { ok: true });
   } finally {
-    child.kill("SIGTERM");
-    await new Promise((resolve) => child.once("exit", resolve));
+    if (child.exitCode === null) {
+      child.kill("SIGTERM");
+      await new Promise((resolve) => child.once("exit", resolve));
+    }
   }
 });
