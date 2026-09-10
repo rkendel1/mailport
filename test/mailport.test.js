@@ -38,7 +38,7 @@ test("supports template send and idempotency", async () => {
 
 test("supports explicit send, list/get/clear, and waitFor", async () => {
   const mail = createMailPort({
-    applicationId: "appboundry",
+    applicationId: "appboundary",
     transport: "memory",
     testEndpointsEnabled: true,
     identities: { system: "notifications@myapp.com" },
@@ -129,4 +129,48 @@ test("waitFor resolves after delayed message arrival", async () => {
     intervalMs: 10,
   });
   assert.equal(result.to[0], "later@example.com");
+});
+
+test("durable outbox retries and eventually marks sent", async () => {
+  let attempts = 0;
+  const mail = createMailPort({
+    applicationId: "appboundry",
+    transport: {
+      kind: "custom",
+      async send() {
+        attempts += 1;
+        if (attempts < 2) {
+          throw new Error("temporary failure");
+        }
+        return { status: "sent" };
+      },
+    },
+    outbox: {
+      enabled: true,
+      pollIntervalMs: 10,
+      retryBaseMs: 10,
+      maxAttempts: 3,
+    },
+    testEndpointsEnabled: true,
+    identities: { system: "notifications@myapp.com" },
+  });
+
+  const queued = await mail.send({
+    identity: "system",
+    to: "retry@example.com",
+    subject: "Retry",
+    text: "Retry body",
+  });
+  assert.equal(queued.status, "queued");
+
+  const delivered = await mail.test.waitFor({
+    to: "retry@example.com",
+    status: "sent",
+    timeoutMs: 1000,
+    intervalMs: 10,
+  });
+  assert.ok(delivered);
+  assert.equal(delivered.status, "sent");
+  assert.equal(attempts, 2);
+  await mail.close();
 });

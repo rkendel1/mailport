@@ -2,6 +2,8 @@ import { randomUUID } from "node:crypto";
 import { MailPortError, ERROR_CODES } from "./errors.js";
 import { renderTemplate, extractLinks } from "./template-renderer.js";
 import { MemoryTransport, LocalTransport, SmtpTransport } from "./transports.js";
+import { createRemoteMailPortClient } from "./remote-client.js";
+import { createOutbox, createOutboxWorker } from "./outbox.js";
 
 const DEFAULT_LIMITS = {
   maxAttachmentCount: 10,
@@ -35,6 +37,10 @@ function estimateSizeBytes(message) {
 }
 
 function resolveTransportName(explicitTransport, environment = process.env) {
+  if (explicitTransport && typeof explicitTransport === "object") {
+    if (typeof explicitTransport.send === "function") return "custom";
+    if (typeof explicitTransport.kind === "string") return explicitTransport.kind;
+  }
   return (
     explicitTransport ||
     environment.FELTDB_MAIL_TRANSPORT ||
@@ -43,7 +49,10 @@ function resolveTransportName(explicitTransport, environment = process.env) {
   );
 }
 
-function createTransport(name) {
+function createTransport(name, explicitTransport) {
+  if (name === "custom" && explicitTransport && typeof explicitTransport.send === "function") {
+    return explicitTransport;
+  }
   if (name === "memory") return new MemoryTransport();
   if (name === "local") return new LocalTransport();
   if (name === "smtp") return new SmtpTransport();
@@ -59,12 +68,49 @@ function deepClone(value) {
 
 export function createMailPort(config) {
   const transportName = resolveTransportName(config.transport, config.environment);
-  const transport = createTransport(transportName);
+  if (transportName === "remote") {
+    return createRemoteMailPortClient({
+      ...(config.remote || {}),
+      testEndpointsEnabled: Boolean(config.testEndpointsEnabled),
+    });
+  }
+
+  const transport = createTransport(transportName, config.transport);
   const identities = config.identities || {};
   const templates = config.templates || {};
   const limits = { ...DEFAULT_LIMITS, ...(config.limits || {}) };
+  const durableOutboxEnabled = Boolean(config.outbox?.enabled || config.outbox?.filePath);
   const messages = new Map();
   const idempotency = new Map();
+  const outbox = durableOutboxEnabled ? createOutbox({ filePath: config.outbox?.filePath }) : null;
+  if (durableOutboxEnabled) {
+    for (const message of outbox.list()) {
+      if (message.idempotencyKey) {
+        idempotency.set(message.idempotencyKey, message);
+      }
+    }
+  }
+  const worker =
+    durableOutboxEnabled && config.outbox?.workerEnabled !== false
+      ? createOutboxWorker({
+          outbox,
+          transport,
+          maxAttempts: config.outbox?.maxAttempts,
+          retryBaseMs: config.outbox?.retryBaseMs,
+          leaseMs: config.outbox?.leaseMs,
+        })
+      : null;
+  const pollIntervalMs = config.outbox?.pollIntervalMs || 25;
+  let workerTick = Promise.resolve();
+  function runWorkerTick() {
+    if (!worker) return Promise.resolve();
+    workerTick = workerTick
+      .catch(() => {})
+      .then(() => worker.tick())
+      .catch(() => {});
+    return workerTick;
+  }
+  const workerInterval = worker && setInterval(() => void runWorkerTick(), pollIntervalMs);
 
   const mail = {
     transportName,
@@ -152,6 +198,31 @@ export function createMailPort(config) {
         );
       }
 
+      if (durableOutboxEnabled) {
+        const existing = payload.idempotencyKey
+          ? outbox.findByIdempotencyKey(payload.idempotencyKey)
+          : null;
+        if (existing) {
+          return deepClone(existing);
+        }
+
+        message.status = "queued";
+        message.delivery_attempts = 0;
+        message.next_retry_at = null;
+        message.lease_token = null;
+        message.lease_expires_at = null;
+        message.updated_at = new Date().toISOString();
+        message.links = extractLinks({ html: message.html, text: message.text });
+        outbox.put(message);
+        if (payload.idempotencyKey) {
+          idempotency.set(payload.idempotencyKey, message);
+        }
+        if (worker) {
+          runWorkerTick();
+        }
+        return deepClone(message);
+      }
+
       messages.set(messageId, message);
       message.status = "queued";
       message.updated_at = new Date().toISOString();
@@ -181,11 +252,15 @@ export function createMailPort(config) {
       return deepClone(message);
     },
     get(messageId) {
+      if (durableOutboxEnabled) {
+        const message = outbox.get(messageId);
+        return message ? deepClone(message) : null;
+      }
       const message = messages.get(messageId);
       return message ? deepClone(message) : null;
     },
     list(filters = {}) {
-      let items = [...messages.values()];
+      let items = durableOutboxEnabled ? outbox.list() : [...messages.values()];
       if (Object.hasOwn(filters, "to")) {
         items = items.filter((m) => m.to.includes(filters.to));
       }
@@ -233,6 +308,9 @@ export function createMailPort(config) {
         }
         messages.clear();
         idempotency.clear();
+        if (durableOutboxEnabled) {
+          outbox.clear();
+        }
       },
       async waitFor({ timeoutMs = 5000, intervalMs = 25, ...filters } = {}) {
         if (!config.testEndpointsEnabled) {
@@ -250,7 +328,17 @@ export function createMailPort(config) {
         return null;
       },
     },
+    async close() {
+      if (workerInterval) {
+        clearInterval(workerInterval);
+      }
+      await workerTick;
+    },
   };
+
+  if (workerInterval && typeof workerInterval.unref === "function") {
+    workerInterval.unref();
+  }
 
   return mail;
 }

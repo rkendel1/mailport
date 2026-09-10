@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { createMailPort } from "../src/mailport.js";
 import { createLocalInboxServer } from "../src/local-inbox-server.js";
+import { createMailPortService } from "../src/remote-service.js";
 
 function readFlag(args, name) {
   const i = args.indexOf(name);
@@ -26,7 +27,7 @@ function printStatus(mail) {
 async function main() {
   const args = process.argv.slice(2);
   if (args[0] !== "mail") {
-    console.error("Usage: app mail <status|dev|send|test>");
+    console.error("Usage: app mail <status|dev|service|send|test>");
     process.exit(1);
   }
 
@@ -51,6 +52,27 @@ async function main() {
     await server.start();
     console.log("MailPort local inbox:");
     console.log("http://127.0.0.1:8788/mail");
+    return;
+  }
+
+  if (args[1] === "service") {
+    const host = readFlag(args, "--host") || "127.0.0.1";
+    const port = Number(readFlag(args, "--port") || 8789);
+    const apiKey = readFlag(args, "--api-key") || process.env.MAILPORT_API_KEY;
+    const outboxFile = readFlag(args, "--outbox-file");
+    const serviceMail = createMailPort({
+      applicationId: process.env.MAILPORT_APPLICATION_ID || "app",
+      transport,
+      identities: { system: "notifications@example.test" },
+      testEndpointsEnabled: true,
+      outbox: {
+        enabled: true,
+        filePath: outboxFile,
+      },
+    });
+    const service = createMailPortService(serviceMail, { host, port, apiKey });
+    await service.start();
+    console.log(`MailPort service listening on http://${host}:${port}`);
     return;
   }
 
