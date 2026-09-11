@@ -1,5 +1,5 @@
 {
-  "name": "mailport-cloudflare-e2e-fixture",
+  "name": "mailerport-cloudflare-e2e-fixture",
   "version": "1.0.0",
   "private": true,
   "type": "module",
