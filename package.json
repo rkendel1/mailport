@@ -9,7 +9,7 @@
   },
   "scripts": {
     "test": "node --test",
-    "test:e2e": "node scripts/run-cloudflare-e2e.js",
+    "test:e2e": "node scripts/run-hetzner-e2e.js",
     "pack:all": "npm pack --workspaces --if-present",
     "publish:all": "npm publish --workspaces --if-present --access public",
     "publish:packages": "node scripts/publish-packages.js"

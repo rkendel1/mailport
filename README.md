@@ -142,6 +142,7 @@ npm run build --workspaces
 Useful scripts:
 
 - `npm test` runs the Node test suite.
+- `npm run test:e2e` installs packed artifacts in a clean fixture, submits through `MAILPORT_URL`, and verifies Hetzner direct-MX acceptance. It requires `MAILPORT_API_KEY` and `TEST_RECIPIENT`; set `MAILPORT_E2E_INSTALL_ONLY=true` to test packaging without live delivery.
 - `npm run build --workspaces` builds every publishable package.
 - `npm run pack:all` creates local package archives.
 - `npm run app -- mail status` shows local or remote service status.

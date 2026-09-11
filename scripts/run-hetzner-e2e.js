@@ -7,11 +7,11 @@ import { fileURLToPath } from "node:url";
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const localEnvironment = path.join(root, ".env.local");
 if (fs.existsSync(localEnvironment)) process.loadEnvFile(localEnvironment);
-const temporary = fs.mkdtempSync(path.join(os.tmpdir(), "mailport-cloudflare-e2e-"));
+const temporary = fs.mkdtempSync(path.join(os.tmpdir(), "mailport-hetzner-e2e-"));
 const application = path.join(temporary, "app");
 const tarballs = path.join(temporary, "packages");
 const commandEnvironment = { ...process.env, npm_config_cache: path.join(temporary, "npm-cache") };
-fs.cpSync(path.join(root, "fixtures/cloudflare-mail-app"), application, { recursive: true,
+fs.cpSync(path.join(root, "fixtures/hetzner-mail-app"), application, { recursive: true,
   filter: (source) => !source.endsWith(`${path.sep}node_modules`) && !source.includes(`${path.sep}node_modules${path.sep}`) });
 fs.mkdirSync(tarballs);
 for (const name of ["core", "mime", "sdk", "smtp"])
